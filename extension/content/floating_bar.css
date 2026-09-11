@@ -1,0 +1,230 @@
+/* Thanh Tải Nổi Siêu Đẹp & Hiện Đại - Vortex Downloader */
+.vortex-floating-container {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 2147483647;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    user-select: none;
+    box-sizing: border-box;
+}
+
+.vortex-floating-container * {
+    box-sizing: border-box;
+}
+
+.vortex-btn-group {
+    display: inline-flex;
+    align-items: center;
+    background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 50%, #7c3aed 100%);
+    border: 1.5px solid rgba(255, 255, 255, 0.45);
+    border-radius: 9px;
+    box-shadow: 0 4px 18px rgba(14, 165, 233, 0.55), 0 0 15px rgba(124, 58, 237, 0.45);
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow: hidden;
+}
+
+.vortex-btn-group:hover {
+    box-shadow: 0 6px 24px rgba(56, 189, 248, 0.75), 0 0 22px rgba(139, 92, 246, 0.65);
+    border-color: rgba(255, 255, 255, 0.85);
+    transform: translateY(-2px);
+}
+
+.vortex-download-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #ffffff !important;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    transition: background 0.2s ease;
+}
+
+.vortex-download-btn:hover {
+    background: rgba(255, 255, 255, 0.18);
+}
+
+.vortex-btn-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    object-fit: contain;
+    flex-shrink: 0;
+}
+
+.vortex-btn-arrow {
+    font-size: 10px;
+    margin-left: 2px;
+    opacity: 0.9;
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.vortex-floating-container.open .vortex-btn-arrow {
+    transform: rotate(180deg);
+}
+
+/* Nút tắt X */
+.vortex-close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 11px;
+    color: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    border-left: 1px solid rgba(255, 255, 255, 0.25);
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1;
+    transition: all 0.2s ease;
+}
+
+.vortex-close-btn:hover {
+    background: rgba(239, 68, 68, 0.7);
+    color: #ffffff;
+}
+
+/* Menu xổ xuống chọn chất lượng */
+.vortex-dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 6px;
+    background: rgba(24, 24, 37, 0.98);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border: 1.5px solid rgba(137, 180, 250, 0.5);
+    border-radius: 10px;
+    padding: 6px;
+    min-width: 270px;
+    max-height: 420px;
+    overflow-y: auto;
+    box-shadow: 0 14px 35px rgba(0, 0, 0, 0.8), 0 0 20px rgba(137, 180, 250, 0.25);
+    z-index: 2147483647;
+    animation: vortexPopIn 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Custom Scrollbar cho dropdown */
+.vortex-dropdown-menu::-webkit-scrollbar {
+    width: 6px;
+}
+.vortex-dropdown-menu::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 4px;
+}
+.vortex-dropdown-menu::-webkit-scrollbar-thumb {
+    background: rgba(137, 180, 250, 0.4);
+    border-radius: 4px;
+}
+.vortex-dropdown-menu::-webkit-scrollbar-thumb:hover {
+    background: rgba(137, 180, 250, 0.75);
+}
+
+/* Cầu nối vô hình chống rớt hover giữa nút và dropdown */
+.vortex-dropdown-menu::before {
+    content: "";
+    position: absolute;
+    top: -12px;
+    left: 0;
+    right: 0;
+    height: 14px;
+    background: transparent;
+}
+
+/* Hiển thị khi hover hoặc khi có class .open */
+.vortex-floating-container:hover .vortex-dropdown-menu,
+.vortex-floating-container.open .vortex-dropdown-menu {
+    display: block !important;
+}
+
+.vortex-menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    color: #cdd6f4;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    transition: all 0.15s ease;
+    gap: 8px;
+}
+
+.vortex-menu-item:hover {
+    background: linear-gradient(135deg, rgba(14, 165, 233, 0.25), rgba(124, 58, 237, 0.25));
+    color: #89b4fa;
+    transform: translateX(4px);
+}
+
+.vortex-item-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+}
+
+.vortex-item-size {
+    font-size: 11px;
+    color: #a6adc8;
+    background: rgba(255, 255, 255, 0.08);
+    padding: 2px 7px;
+    border-radius: 5px;
+    font-weight: 500;
+    letter-spacing: 0.2px;
+    flex-shrink: 0;
+}
+
+.vortex-menu-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.12);
+    margin: 5px 6px;
+}
+
+.vortex-menu-status {
+    padding: 6px 10px;
+    font-size: 11px;
+    color: #89b4fa;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    opacity: 0.85;
+}
+
+/* Toast thông báo nổi khi bấm tải */
+.vortex-toast {
+    position: fixed;
+    bottom: 28px;
+    right: 28px;
+    z-index: 2147483647;
+    background: rgba(24, 24, 37, 0.96);
+    backdrop-filter: blur(14px);
+    border: 1.5px solid #a6e3a1;
+    color: #a6e3a1;
+    padding: 13px 20px;
+    border-radius: 9px;
+    font-weight: 700;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 15px rgba(166, 227, 161, 0.3);
+    animation: vortexSlideUp 0.3s ease;
+}
+
+@keyframes vortexPopIn {
+    from { opacity: 0; transform: translateY(-6px) scale(0.96); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes vortexSlideUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}

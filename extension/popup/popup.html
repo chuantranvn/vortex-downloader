@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Vortex Downloader</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="header">
+        <img src="../icons/icon32.png" alt="Logo" class="logo">
+        <div class="title-wrap">
+            <span class="brand-title">VORTEX DOWNLOADER</span>
+            <span id="gateway-status" class="status-badge connecting">● Đang kiểm tra...</span>
+        </div>
+    </div>
+
+    <div class="content">
+        <div class="page-info">
+            <div class="info-label">Trang hiện tại:</div>
+            <div id="tab-title" class="tab-title">Đang tải...</div>
+        </div>
+
+        <div class="actions">
+            <button id="btn-quick-download" class="btn btn-primary">
+                <span>🚀</span> Tải Video Trên Trang Này
+            </button>
+            <button id="btn-audio-download" class="btn btn-secondary">
+                <span>🎵</span> Chỉ Tải Âm Thanh (MP3)
+            </button>
+        </div>
+
+        <div id="status-message" class="status-message"></div>
+    </div>
+    <script src="popup.js"></script>
+</body>
+</html>
