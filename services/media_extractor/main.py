@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from common.schemas import DownloadRequest, DownloadTask, MediaMetadata
+from common.schemas import DownloadRequest, DownloadTask, MediaMetadata, CookieSyncRequest
 from services.media_extractor.extractor import MediaExtractorEngine
 
 app = FastAPI(title="Vortex Media Extractor Service", version="1.0.0")
@@ -23,11 +23,16 @@ engine = MediaExtractorEngine()
 def health_check():
     return {"status": "healthy", "service": "media_extractor"}
 
+@app.post("/api/v1/cookies/sync")
+def sync_cookies(req: CookieSyncRequest):
+    engine.save_cookies(req.cookies)
+    return {"status": "synced"}
+
 @app.post("/api/v1/extract", response_model=MediaMetadata)
 async def extract_media_info(req: DownloadRequest):
     try:
         import asyncio
-        return await asyncio.to_thread(engine.extract_info, req.url)
+        return await asyncio.to_thread(engine.extract_info, req.url, req.cookies)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Cannot extract media info: {str(e)}")
 
@@ -38,7 +43,8 @@ async def start_download(req: DownloadRequest):
             url=req.url,
             save_path=req.save_path,
             file_name=req.file_name,
-            format_id=req.format_id
+            format_id=req.format_id,
+            cookies=req.cookies
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

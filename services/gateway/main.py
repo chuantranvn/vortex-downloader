@@ -8,8 +8,10 @@ from typing import List, Dict, Any, Optional
 import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from common.schemas import DownloadRequest, DownloadTask, TaskStatus, EngineType, MediaMetadata
+from pydantic import BaseModel
+from common.schemas import DownloadRequest, DownloadTask, TaskStatus, EngineType, MediaMetadata, CookieSyncRequest
 from common.database import HistoryDatabase
+from common.utils import clean_video_url
 
 app = FastAPI(
     title="Vortex Downloader - API Gateway",
@@ -144,6 +146,7 @@ async def health_check():
 
 @app.post("/api/v1/extract", response_model=MediaMetadata)
 async def extract_media(req: DownloadRequest):
+    req.url = clean_video_url(req.url)
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             res = await client.post(f"{MEDIA_EXTRACTOR_URL}/api/v1/extract", json=req.dict())
@@ -162,8 +165,104 @@ async def probe_direct_file(req: DownloadRequest):
         except httpx.RequestError as e:
             raise HTTPException(status_code=503, detail=f"Core Engine service offline: {str(e)}")
 
+@app.post("/api/v1/cookies/sync")
+async def sync_cookies(req: CookieSyncRequest):
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            res = await client.post(f"{MEDIA_EXTRACTOR_URL}/api/v1/cookies/sync", json=req.dict())
+            return res.json()
+        except Exception as e:
+            return {"status": "error", "detail": str(e)}
+
+def _show_folder_dialog(initial_dir: Optional[str] = None) -> Optional[str]:
+    import tkinter as tk
+    from tkinter import filedialog
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        start_dir = initial_dir or db.get_setting("default_download_dir") or os.path.abspath("downloads")
+        selected = filedialog.askdirectory(
+            master=root,
+            title="Chọn Thư Mục Lưu Video - Vortex Downloader",
+            initialdir=start_dir
+        )
+        root.destroy()
+        if selected:
+            return os.path.normpath(selected)
+    except Exception as e:
+        print(f"[Gateway] Folder picker error: {e}")
+    return None
+
+class SettingsUpdate(BaseModel):
+    default_download_dir: Optional[str] = None
+
+@app.get("/api/v1/system/settings")
+async def get_system_settings():
+    saved_dir = db.get_setting("default_download_dir", os.path.abspath("downloads"))
+    return {"default_download_dir": saved_dir}
+
+@app.post("/api/v1/system/settings")
+async def update_system_settings(settings: SettingsUpdate):
+    if settings.default_download_dir:
+        norm = os.path.normpath(settings.default_download_dir)
+        os.makedirs(norm, exist_ok=True)
+        db.set_setting("default_download_dir", norm)
+        return {"status": "ok", "default_download_dir": norm}
+    return {"status": "noop"}
+
+class OpenDialogRequest(BaseModel):
+    url: str
+    format_id: Optional[str] = None
+    cookies: Optional[str] = None
+    save_path: Optional[str] = None
+    title: Optional[str] = None
+
+pending_open_dialog: Optional[dict] = None
+
+@app.post("/api/v1/system/open_add_dialog")
+async def open_add_dialog_api(req: OpenDialogRequest):
+    global pending_open_dialog
+    clean_url = clean_video_url(req.url)
+    msg = {
+        "type": "open_add_dialog",
+        "url": clean_url,
+        "format_id": req.format_id,
+        "cookies": req.cookies,
+        "save_path": req.save_path or db.get_setting("default_download_dir", os.path.abspath("downloads")),
+        "title": req.title
+    }
+    
+    if hub.active_connections:
+        await hub.broadcast(msg)
+        return {"status": "ok", "delivered": True}
+    else:
+        pending_open_dialog = msg
+        try:
+            import subprocess
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+            venv_py = os.path.join(base_dir, ".venv", "Scripts", "python.exe")
+            py_exe = venv_py if os.path.exists(venv_py) else sys.executable
+            subprocess.Popen([py_exe, "run_app.py"], cwd=base_dir)
+        except Exception as e:
+            print(f"[Gateway] Error launching GUI: {e}")
+        return {"status": "ok", "delivered": False, "launched": True}
+
+@app.get("/api/v1/system/browse_folder")
+@app.post("/api/v1/system/browse_folder")
+async def browse_folder(initial_dir: Optional[str] = None):
+    chosen = await asyncio.to_thread(_show_folder_dialog, initial_dir)
+    return {
+        "status": "ok" if chosen else "cancelled",
+        "folder": chosen
+    }
+
 @app.post("/api/v1/download", response_model=DownloadTask)
 async def create_download(req: DownloadRequest):
+    req.url = clean_video_url(req.url)
+    if not req.save_path:
+        req.save_path = db.get_setting("default_download_dir", os.path.abspath("downloads"))
+
     is_media = is_streaming_media_url(req.url) or (req.format_id is not None)
     target_engine = MEDIA_EXTRACTOR_URL if is_media else CORE_ENGINE_URL
 
@@ -253,22 +352,59 @@ async def resume_task(task_id: str):
             raise HTTPException(status_code=res.status_code, detail=res.text)
         return res.json()
 
+class BatchDeleteRequest(BaseModel):
+    task_ids: List[str]
+
+@app.post("/api/v1/tasks/batch_delete")
+async def batch_delete_tasks(req: BatchDeleteRequest):
+    if not req.task_ids:
+        return {"status": "ok", "deleted_count": 0}
+
+    # 1. Song song gửi lệnh hủy tới các engines đang chạy task
+    async with httpx.AsyncClient(timeout=1.0) as client:
+        cancel_coros = []
+        for tid in req.task_ids:
+            engine_url = task_engine_map.get(tid)
+            if engine_url:
+                cancel_coros.append(client.post(f"{engine_url}/api/v1/download/{tid}/cancel"))
+        if cancel_coros:
+            await asyncio.gather(*cancel_coros, return_exceptions=True)
+
+    # 2. Xóa hàng loạt khỏi database SQLite trong 1 lệnh duy nhất (<2ms)
+    db.delete_tasks_batch(req.task_ids)
+
+    # 3. Phát thông báo xóa qua WebSocket
+    for tid in req.task_ids:
+        await hub.broadcast({"type": "task_deleted", "task_id": tid})
+
+    return {"status": "ok", "deleted_count": len(req.task_ids)}
+
 @app.post("/api/v1/tasks/{task_id}/cancel")
 async def cancel_task(task_id: str):
-    engine_url = task_engine_map.get(task_id, CORE_ENGINE_URL)
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(f"{engine_url}/api/v1/download/{task_id}/cancel")
-    except Exception:
-        pass
+    engine_url = task_engine_map.get(task_id)
+    if engine_url:
+        try:
+            async with httpx.AsyncClient(timeout=1.0) as client:
+                await client.post(f"{engine_url}/api/v1/download/{task_id}/cancel")
+        except Exception:
+            pass
     
     # Xóa khỏi database SQLite
     db.delete_task(task_id)
+    await hub.broadcast({"type": "task_deleted", "task_id": task_id})
     return {"status": "deleted", "task_id": task_id}
 
 @app.websocket("/ws/progress")
 async def websocket_progress_endpoint(websocket: WebSocket):
+    global pending_open_dialog
     await hub.connect(websocket)
+    if pending_open_dialog:
+        msg = pending_open_dialog
+        pending_open_dialog = None
+        try:
+            await websocket.send_json(msg)
+        except Exception:
+            pass
     try:
         while True:
             await websocket.receive_text()

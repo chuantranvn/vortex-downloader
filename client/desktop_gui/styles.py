@@ -144,4 +144,26 @@ QMenu::item:selected {
     background-color: #313244;
     color: #89b4fa;
 }
+
+QCheckBox {
+    spacing: 0px;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #585b70;
+    border-radius: 4px;
+    background-color: #1e1e2e;
+}
+
+QCheckBox::indicator:hover {
+    border-color: #89b4fa;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #89b4fa;
+    border-color: #89b4fa;
+    image: none;
+}
 """

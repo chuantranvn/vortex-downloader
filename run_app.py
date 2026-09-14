@@ -17,9 +17,19 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-PYTHON_EXE = sys.executable
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+VENV_PYTHON = os.path.join(BASE_DIR, ".venv", "Scripts", "python.exe")
+PYTHON_EXE = VENV_PYTHON if os.path.exists(VENV_PYTHON) else sys.executable
 ICON_PATH = os.path.join(BASE_DIR, "client", "desktop_gui", "assets", "vortex_icon.png")
+
+def kill_existing_microservices():
+    if sys.platform == "win32":
+        try:
+            cmd = "Get-NetTCPConnection -LocalPort 8000,8001,8002 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"
+            subprocess.run(["powershell", "-Command", cmd], capture_output=True)
+            time.sleep(0.5)
+        except Exception:
+            pass
 
 def is_gateway_running() -> bool:
     try:
@@ -32,6 +42,10 @@ def main():
     print("=" * 65)
     print("  [VORTEX DOWNLOADER] KHOI DONG UNG DUNG DESKTOP")
     print("=" * 65)
+
+    if "--restart" in sys.argv:
+        print(" [*] Dang khoi dong lai cac Microservices...")
+        kill_existing_microservices()
 
     services_procs = []
     if not is_gateway_running():

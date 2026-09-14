@@ -37,6 +37,12 @@ class HistoryDatabase:
                     error_message TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
             conn.commit()
 
     def upsert_task(self, task: DownloadTask):
@@ -137,4 +143,26 @@ class HistoryDatabase:
     def delete_task(self, task_id: str):
         with self._get_connection() as conn:
             conn.execute("DELETE FROM download_history WHERE id = ?", (task_id,))
+            conn.commit()
+
+    def delete_tasks_batch(self, task_ids: List[str]):
+        if not task_ids:
+            return
+        placeholders = ",".join("?" for _ in task_ids)
+        with self._get_connection() as conn:
+            conn.execute(f"DELETE FROM download_history WHERE id IN ({placeholders})", task_ids)
+            conn.commit()
+
+    def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = cur.fetchone()
+            return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str):
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO settings (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """, (key, value))
             conn.commit()

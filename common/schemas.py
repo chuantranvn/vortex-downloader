@@ -22,6 +22,10 @@ class DownloadRequest(BaseModel):
     num_threads: int = Field(default=8, ge=1, le=32)
     headers: Optional[Dict[str, str]] = None
     format_id: Optional[str] = None
+    cookies: Optional[str] = None
+
+class CookieSyncRequest(BaseModel):
+    cookies: str
 
 class ChunkProgress(BaseModel):
     chunk_id: int

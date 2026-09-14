@@ -73,8 +73,12 @@ ehthumbs.db
 # Project local data & downloads
 data/*.db
 data/*.db-journal
+data/*.txt
+data/cookies.txt
 downloads/
+test_workspace/
 *.log
 
 # Extension signing key (Sensitive)
 extension.pem
+

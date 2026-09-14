@@ -1,15 +1,35 @@
+import sys
 import os
 import re
+from typing import Optional
 import httpx
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QSpinBox, QComboBox, QFileDialog, QMessageBox
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QIcon
+
+from common.utils import clean_video_url
+from client.desktop_gui.loading_overlay import LoadingOverlay
 
 GATEWAY_URL = "http://localhost:8000"
 ICON_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "assets/vortex_icon.png"))
+
+STANDARD_PRESETS = [
+    ("🌟 Tự động chọn chất lượng cao nhất (Best Quality)", "bestvideo+bestaudio/best"),
+    ("🎬 4320p (8K UHD)", "bestvideo[height<=4320]+bestaudio/best"),
+    ("🎬 2160p (4K UHD)", "bestvideo[height<=2160]+bestaudio/best"),
+    ("🎬 1440p (2K QHD)", "bestvideo[height<=1440]+bestaudio/best"),
+    ("🖥️ 1080p Full HD", "bestvideo[height<=1080]+bestaudio/best"),
+    ("📺 720p HD", "bestvideo[height<=720]+bestaudio/best"),
+    ("📱 480p SD", "bestvideo[height<=480]+bestaudio/best"),
+    ("📱 360p", "bestvideo[height<=360]+bestaudio/best"),
+    ("📱 240p", "bestvideo[height<=240]+bestaudio/best"),
+    ("📱 180p", "bestvideo[height<=180]+bestaudio/best"),
+    ("📱 144p", "bestvideo[height<=144]+bestaudio/best"),
+    ("🎵 Chỉ tải Âm thanh (Audio MP3)", "audio_only"),
+]
 
 def sanitize_filename(name: str) -> str:
     return "".join(c for c in name if c not in r'\/:*?"<>|').strip()
@@ -24,24 +44,95 @@ def format_approx_size(num_bytes: int) -> str:
     else:
         return f" (~{num_bytes / (1024 * 1024 * 1024):.2f} GB)"
 
+class AnalyzeWorker(QThread):
+    success = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, url: str, cookies: Optional[str]):
+        super().__init__()
+        self.url = url
+        self.cookies = cookies
+
+    def run(self):
+        try:
+            req_body = {"url": self.url}
+            if self.cookies:
+                req_body["cookies"] = self.cookies
+            with httpx.Client(timeout=20.0) as client:
+                res = client.post(f"{GATEWAY_URL}/api/v1/extract", json=req_body)
+                if res.status_code == 200:
+                    self.success.emit(res.json())
+                else:
+                    self.failed.emit(res.text)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+class DownloadStarterWorker(QThread):
+    success = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, payload: dict):
+        super().__init__()
+        self.payload = payload
+
+    def run(self):
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                res = client.post(f"{GATEWAY_URL}/api/v1/download", json=self.payload)
+                if res.status_code == 200:
+                    self.success.emit(res.json())
+                else:
+                    self.failed.emit(res.text)
+        except Exception as e:
+            self.failed.emit(str(e))
+
 class AddDownloadDialog(QDialog):
-    def __init__(self, parent=None, initial_url: str = ""):
+    def __init__(
+        self,
+        parent=None,
+        initial_url: str = "",
+        initial_format: Optional[str] = None,
+        initial_cookies: Optional[str] = None,
+        initial_folder: Optional[str] = None,
+        initial_title: Optional[str] = None
+    ):
         super().__init__(parent)
         self.setWindowTitle("Thêm URL Tải Xuống - Vortex Downloader")
         self.setMinimumWidth(620)
+        
+        # Luôn nổi lên trên cùng (đè lên trình duyệt Chrome/Edge)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
         if os.path.exists(ICON_PATH):
             self.setWindowIcon(QIcon(ICON_PATH))
 
         self.download_task_created = None
         self.extracted_formats = []
+        self.initial_format = initial_format
+        self.initial_cookies = initial_cookies
+        self.initial_title = initial_title
+        self.analyze_worker: Optional[AnalyzeWorker] = None
+        initial_url = clean_video_url(initial_url)
+        self._build_ui(initial_url, initial_folder, initial_title)
+        self.loading_overlay = LoadingOverlay(self)
 
-        self._build_ui(initial_url)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "loading_overlay") and self.loading_overlay:
+            self.loading_overlay.setGeometry(self.rect())
 
-        # Nếu có sẵn URL khi mở, tự động phân tích sau 300ms
-        if initial_url and any(domain in initial_url.lower() for domain in ["youtube", "youtu.be", "tiktok", "facebook", "fb.watch", "vimeo"]):
-            QTimer.singleShot(300, self._analyze_video)
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.raise_()
+        self.activateWindow()
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                hwnd = int(self.winId())
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
 
-    def _build_ui(self, initial_url: str):
+    def _build_ui(self, initial_url: str, initial_folder: Optional[str] = None, initial_title: Optional[str] = None):
         layout = QVBoxLayout(self)
         layout.setSpacing(14)
 
@@ -54,14 +145,18 @@ class AddDownloadDialog(QDialog):
         url_layout.addWidget(self.url_input)
 
         self.btn_analyze = QPushButton("🔍 Phân tích Video")
-        self.btn_analyze.clicked.connect(self._analyze_video)
+        self.btn_analyze.clicked.connect(self._start_async_analysis)
         url_layout.addWidget(self.btn_analyze)
         layout.addLayout(url_layout)
 
         # Video info banner
         self.lbl_video_info = QLabel("")
         self.lbl_video_info.setStyleSheet("color: #a6e3a1; font-weight: bold; background-color: #313244; padding: 6px 10px; border-radius: 6px;")
-        self.lbl_video_info.setVisible(False)
+        if initial_title:
+            self.lbl_video_info.setText(f"🎬 {initial_title}")
+            self.lbl_video_info.setVisible(True)
+        else:
+            self.lbl_video_info.setVisible(False)
         layout.addWidget(self.lbl_video_info)
 
         # 2. Format selector (Chọn chất lượng video mong muốn)
@@ -69,16 +164,23 @@ class AddDownloadDialog(QDialog):
         self.lbl_format = QLabel("<b>🎯 Chọn độ phân giải muốn tải (Chỉ tải 1 bản, không tải thừa):</b>")
         self.combo_format = QComboBox()
         self.combo_format.setStyleSheet("padding: 8px;")
+
+        # Nạp ngay danh sách preset chuẩn để UI có sẵn lập tức, không cần đợi mạng
+        for label, fmt in STANDARD_PRESETS:
+            self.combo_format.addItem(label, fmt)
+
+        self.combo_format.currentIndexChanged.connect(self._on_format_changed)
         self.format_layout.addWidget(self.lbl_format)
         self.format_layout.addWidget(self.combo_format)
-        self.lbl_format.setVisible(False)
-        self.combo_format.setVisible(False)
         layout.addLayout(self.format_layout)
 
         # 3. Save Directory
         layout.addWidget(QLabel("<b>Thư mục lưu trữ:</b>"))
         dir_layout = QHBoxLayout()
-        default_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../downloads"))
+        
+        default_dir = initial_folder if (initial_folder and os.path.exists(initial_folder)) else None
+        if not default_dir:
+            default_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../downloads"))
         os.makedirs(default_dir, exist_ok=True)
         self.dir_input = QLineEdit(default_dir)
         dir_layout.addWidget(self.dir_input)
@@ -99,9 +201,17 @@ class AddDownloadDialog(QDialog):
         settings_layout.addSpacing(20)
         settings_layout.addWidget(QLabel("Tên file:"))
         self.filename_input = QLineEdit()
-        self.filename_input.setPlaceholderText("Tự động lấy tiêu đề thực của video...")
+        if initial_title:
+            safe = sanitize_filename(initial_title)
+            ext = ".mp3" if (self.initial_format == "audio_only") else ".mp4"
+            self.filename_input.setText(f"{safe}{ext}")
+        else:
+            self.filename_input.setPlaceholderText("Tự động lấy tiêu đề thực của video...")
         settings_layout.addWidget(self.filename_input, 1)
         layout.addLayout(settings_layout)
+
+        # Chọn đúng định dạng ban đầu sau khi đã khởi tạo filename_input
+        self._select_matching_format(self.initial_format)
 
         # 5. Buttons
         btn_layout = QHBoxLayout()
@@ -118,20 +228,85 @@ class AddDownloadDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
+    def _select_matching_format(self, target: Optional[str]):
+        if not target:
+            return
+        target = str(target).strip()
+        matched_idx = -1
+
+        # 1. Định dạng chỉ tải âm thanh (Audio Only)
+        if target == "audio_only" or target in ("bestaudio", "mp3") or target.startswith("audio_"):
+            for idx in range(self.combo_format.count()):
+                if self.combo_format.itemData(idx) == "audio_only":
+                    matched_idx = idx
+                    break
+
+        # 2. Chất lượng tốt nhất (Best Quality)
+        elif target in ("bestvideo+bestaudio/best", "best", "bestquality"):
+            for idx in range(self.combo_format.count()):
+                if self.combo_format.itemData(idx) == "bestvideo+bestaudio/best":
+                    matched_idx = idx
+                    break
+
+        # 3. Video độ phân giải cụ thể (ví dụ height<=1080, 1080p, v.v.)
+        else:
+            h_match = re.search(r'height<=?(\d+)', target) or re.search(r'(\d+)p', target)
+            if h_match:
+                target_h = int(h_match.group(1))
+                for idx in range(self.combo_format.count()):
+                    data_val = str(self.combo_format.itemData(idx) or "")
+                    text = self.combo_format.itemText(idx)
+                    if f"<={target_h}]" in data_val or re.search(rf'\b{target_h}p\b', text):
+                        matched_idx = idx
+                        break
+
+                # Nếu chưa có trong danh sách chuẩn, tự động chèn vào vị trí thích hợp
+                if matched_idx == -1:
+                    badge = f"🎬 {target_h}p (8K UHD)" if target_h >= 4320 else (
+                        f"🎬 {target_h}p (4K UHD)" if target_h >= 2160 else f"📺 {target_h}p"
+                    )
+                    fmt_val = f"bestvideo[height<={target_h}]+bestaudio/best"
+                    self.combo_format.insertItem(1, badge, fmt_val)
+                    matched_idx = 1
+            else:
+                # Tìm kiếm trực tiếp theo itemData
+                for idx in range(self.combo_format.count()):
+                    if self.combo_format.itemData(idx) == target:
+                        matched_idx = idx
+                        break
+
+        if matched_idx >= 0 and matched_idx < self.combo_format.count():
+            self.combo_format.blockSignals(True)
+            self.combo_format.setCurrentIndex(matched_idx)
+            self.combo_format.blockSignals(False)
+            self._on_format_changed(matched_idx)
+
+    def _on_format_changed(self, index: int):
+        if not hasattr(self, "filename_input") or not self.filename_input:
+            return
+        fmt_data = str(self.combo_format.itemData(index) or "")
+        cur_name = self.filename_input.text().strip()
+        if not cur_name:
+            return
+        base, ext = os.path.splitext(cur_name)
+        if fmt_data == "audio_only":
+            self.filename_input.setText(f"{base}.mp3")
+        else:
+            if ext.lower() in [".mp3", ".m4a", ".aac"]:
+                self.filename_input.setText(f"{base}.mp4")
+
     def _on_url_changed(self, text: str):
-        # Reset banner và format khi đổi link
         text = text.strip()
         if not text:
             self.lbl_video_info.setVisible(False)
-            self.lbl_format.setVisible(False)
-            self.combo_format.setVisible(False)
 
     def _browse_dir(self):
         folder = QFileDialog.getExistingDirectory(self, "Chọn thư mục lưu trữ", self.dir_input.text())
         if folder:
-            self.dir_input.setText(folder)
+            norm = os.path.normpath(folder)
+            self.dir_input.setText(norm)
 
-    def _analyze_video(self):
+    def _start_async_analysis(self):
         url = self.url_input.text().strip()
         if not url:
             QMessageBox.warning(self, "Cảnh báo", "Vui lòng nhập đường link URL!")
@@ -139,58 +314,64 @@ class AddDownloadDialog(QDialog):
 
         self.btn_analyze.setEnabled(False)
         self.btn_analyze.setText("⏳ Đang phân tích...")
+        self.loading_overlay.show_message("Đang phân tích thông tin video...")
 
-        try:
-            with httpx.Client(timeout=25.0) as client:
-                res = client.post(f"{GATEWAY_URL}/api/v1/extract", json={"url": url})
-                if res.status_code == 200:
-                    data = res.json()
-                    title = data.get("title", "Video")
-                    formats = data.get("formats", [])
-                    self.extracted_formats = formats
+        # Chạy trong luồng phụ (QThread) để tuyệt đối không bao giờ làm đơ giao diện
+        self.analyze_worker = AnalyzeWorker(url, self.initial_cookies)
+        self.analyze_worker.success.connect(self._on_analysis_success)
+        self.analyze_worker.failed.connect(self._on_analysis_failed)
+        self.analyze_worker.start()
 
-                    safe_name = sanitize_filename(title)
-                    self.filename_input.setText(f"{safe_name}.mp4")
+    def _on_analysis_success(self, data: dict):
+        self.loading_overlay.hide_overlay()
+        self.btn_analyze.setEnabled(True)
+        self.btn_analyze.setText("🔍 Phân tích Video")
 
-                    self.lbl_video_info.setText(f"🎬 {title}")
-                    self.lbl_video_info.setVisible(True)
+        title = data.get("title", "Video")
+        formats = data.get("formats", [])
+        self.extracted_formats = formats
 
-                    self.combo_format.clear()
-                    self.combo_format.addItem("🌟 Tự động chọn chất lượng cao nhất (Best Quality)", "bestvideo+bestaudio/best")
+        safe_name = sanitize_filename(title)
+        is_audio = (self.combo_format.currentData() == "audio_only")
+        ext = ".mp3" if is_audio else ".mp4"
+        self.filename_input.setText(f"{safe_name}{ext}")
 
-                    # Lọc và nhóm các độ phân giải theo thứ tự từ cao đến thấp
-                    unique_resolutions = {}
-                    for f in formats:
-                        res_str = f.get("resolution")
-                        fmt_id = f.get("format_id")
-                        vcodec = f.get("vcodec")
-                        size_str = format_approx_size(f.get("filesize_approx"))
+        self.lbl_video_info.setText(f"🎬 {title}")
+        self.lbl_video_info.setVisible(True)
 
-                        # Chỉ lấy các format có video
-                        if res_str and "x" in res_str and vcodec != "none":
-                            height_match = re.search(r'x(\d+)', res_str)
-                            height = int(height_match.group(1)) if height_match else 0
-                            if height not in unique_resolutions:
-                                unique_resolutions[height] = (res_str, fmt_id, size_str)
+        # Lọc và nhóm các độ phân giải theo thứ tự từ cao đến thấp
+        unique_resolutions = {}
+        for f in formats:
+            res_str = f.get("resolution")
+            fmt_id = f.get("format_id")
+            vcodec = f.get("vcodec")
+            size_str = format_approx_size(f.get("filesize_approx"))
 
-                    # Sắp xếp từ cao xuống thấp: 2160p (4K), 1440p (2K), 1080p, 720p, 480p, 360p
-                    for h in sorted(unique_resolutions.keys(), reverse=True):
-                        res_str, fmt_id, size_str = unique_resolutions[h]
-                        label = f"📺 {h}p ({res_str}){size_str}"
-                        self.combo_format.addItem(label, fmt_id)
+            if res_str and "x" in res_str and vcodec != "none":
+                height_match = re.search(r'x(\d+)', res_str)
+                height = int(height_match.group(1)) if height_match else 0
+                if height not in unique_resolutions:
+                    unique_resolutions[height] = (res_str, fmt_id, size_str)
 
-                    # Thêm tùy chọn chỉ tải âm thanh
-                    self.combo_format.addItem("🎵 Chỉ tải Âm thanh (Audio MP3)", "audio_only")
+        if unique_resolutions:
+            current_choice = self.combo_format.currentData()
+            self.combo_format.blockSignals(True)
+            self.combo_format.clear()
+            self.combo_format.addItem("🌟 Tự động chọn chất lượng cao nhất (Best Quality)", "bestvideo+bestaudio/best")
 
-                    self.lbl_format.setVisible(True)
-                    self.combo_format.setVisible(True)
-                else:
-                    QMessageBox.information(self, "Thông báo", "Đây là link tải file trực tiếp (không phải video streaming).")
-        except Exception as e:
-            QMessageBox.warning(self, "Lỗi phân tích", f"Không thể phân tích video: {str(e)}")
-        finally:
-            self.btn_analyze.setEnabled(True)
-            self.btn_analyze.setText("🔍 Phân tích Video")
+            for h in sorted(unique_resolutions.keys(), reverse=True):
+                res_str, fmt_id, size_str = unique_resolutions[h]
+                label = f"📺 {h}p ({res_str}){size_str}"
+                self.combo_format.addItem(label, f"bestvideo[height<={h}]+bestaudio/best")
+
+            self.combo_format.addItem("🎵 Chỉ tải Âm thanh (Audio MP3)", "audio_only")
+            self._select_matching_format(current_choice)
+            self.combo_format.blockSignals(False)
+
+    def _on_analysis_failed(self, err: str):
+        self.loading_overlay.hide_overlay()
+        self.btn_analyze.setEnabled(True)
+        self.btn_analyze.setText("🔍 Phân tích Video")
 
     def _start_download(self):
         url = self.url_input.text().strip()
@@ -198,27 +379,37 @@ class AddDownloadDialog(QDialog):
             QMessageBox.warning(self, "Cảnh báo", "Vui lòng nhập đường link URL!")
             return
 
-        selected_format = None
-        if self.combo_format.isVisible() and self.combo_format.currentIndex() >= 0:
-            selected_format = self.combo_format.currentData()
-
+        selected_format = self.combo_format.currentData() or self.initial_format
         filename_val = self.filename_input.text().strip() or None
+        save_folder = self.dir_input.text().strip()
 
         payload = {
             "url": url,
-            "save_path": self.dir_input.text().strip(),
+            "save_path": save_folder,
             "file_name": filename_val,
             "num_threads": self.spin_threads.value(),
             "format_id": selected_format
         }
+        if self.initial_cookies:
+            payload["cookies"] = self.initial_cookies
 
-        try:
-            with httpx.Client(timeout=10.0) as client:
-                res = client.post(f"{GATEWAY_URL}/api/v1/download", json=payload)
-                if res.status_code == 200:
-                    self.download_task_created = res.json()
-                    self.accept()
-                else:
-                    QMessageBox.critical(self, "Lỗi", f"Không thể bắt đầu tải: {res.text}")
-        except Exception as e:
-            QMessageBox.critical(self, "Lỗi kết nối", f"Không thể kết nối đến Gateway: {str(e)}")
+        self.btn_download.setEnabled(False)
+        self.btn_download.setText("⏳ Đang bắt đầu...")
+        self.loading_overlay.show_message("Đang khởi tạo tiến trình tải...")
+
+        # Chạy khởi tạo task tải trong luồng phụ để cửa sổ đóng mượt mà, không giật lag
+        self.starter_worker = DownloadStarterWorker(payload)
+        self.starter_worker.success.connect(self._on_download_started)
+        self.starter_worker.failed.connect(self._on_download_failed)
+        self.starter_worker.start()
+
+    def _on_download_started(self, data: dict):
+        self.loading_overlay.hide_overlay()
+        self.download_task_created = data
+        self.accept()
+
+    def _on_download_failed(self, err: str):
+        self.loading_overlay.hide_overlay()
+        self.btn_download.setEnabled(True)
+        self.btn_download.setText("🚀 Bắt đầu tải ngay")
+        QMessageBox.critical(self, "Lỗi kết nối", f"Không thể bắt đầu tải: {err}")

@@ -11,7 +11,9 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-PYTHON_EXE = sys.executable
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+VENV_PYTHON = os.path.join(BASE_DIR, ".venv", "Scripts", "python.exe")
+PYTHON_EXE = VENV_PYTHON if os.path.exists(VENV_PYTHON) else sys.executable
 
 def start_services():
     print("=" * 65)

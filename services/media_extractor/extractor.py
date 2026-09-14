@@ -7,18 +7,27 @@ from typing import Dict, Optional, List
 import yt_dlp
 import imageio_ffmpeg
 from common.schemas import DownloadTask, TaskStatus, EngineType, MediaMetadata, MediaFormat
-
-def sanitize_filename(name: str) -> str:
-    return "".join(c for c in name if c not in r'\/:*?"<>|').strip()
+from common.utils import sanitize_filename, get_unique_filepath, clean_video_url
 
 class MediaExtractorEngine:
     def __init__(self, default_download_dir: str = "downloads"):
         self.download_dir = os.path.abspath(default_download_dir)
         os.makedirs(self.download_dir, exist_ok=True)
+        self.data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data"))
+        os.makedirs(self.data_dir, exist_ok=True)
+        self.cookie_file_path = os.path.join(self.data_dir, "cookies.txt")
         self.ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
         self.tasks: Dict[str, DownloadTask] = {}
         self._pause_events: Dict[str, threading.Event] = {}
         self._cancelled_tasks: Dict[str, bool] = {}
+
+    def save_cookies(self, cookies_content: str):
+        if cookies_content and len(cookies_content.strip()) > 0:
+            try:
+                with open(self.cookie_file_path, "w", encoding="utf-8") as f:
+                    f.write(cookies_content)
+            except Exception as e:
+                print(f"[MediaExtractor] Failed to save cookies: {e}")
 
     def get_task(self, task_id: str) -> Optional[DownloadTask]:
         return self.tasks.get(task_id)
@@ -26,12 +35,23 @@ class MediaExtractorEngine:
     def get_all_tasks(self) -> List[DownloadTask]:
         return list(self.tasks.values())
 
-    def extract_info(self, url: str) -> MediaMetadata:
+    def extract_info(self, url: str, cookies: Optional[str] = None) -> MediaMetadata:
+        url = clean_video_url(url)
+        if cookies:
+            self.save_cookies(cookies)
+
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
+            "noplaylist": True,
+            "extract_flat": False,
+            "js_runtimes": {"node": {}},
+            "remote_components": ["ejs:github"],
         }
+        if os.path.exists(self.cookie_file_path) and os.path.getsize(self.cookie_file_path) > 0:
+            ydl_opts["cookiefile"] = self.cookie_file_path
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             formats_list: List[MediaFormat] = []
@@ -70,8 +90,12 @@ class MediaExtractorEngine:
         url: str,
         save_path: Optional[str] = None,
         file_name: Optional[str] = None,
-        format_id: Optional[str] = None
+        format_id: Optional[str] = None,
+        cookies: Optional[str] = None
     ) -> DownloadTask:
+        if cookies:
+            self.save_cookies(cookies)
+
         task_id = str(uuid.uuid4())[:8]
         now = time.time()
         target_dir = os.path.abspath(save_path) if save_path else self.download_dir
@@ -103,7 +127,7 @@ class MediaExtractorEngine:
         self._cancelled_tasks[task_id] = False
 
         asyncio.create_task(
-            asyncio.to_thread(self._run_ytdlp_download, task_id, url, target_dir, file_name, format_id)
+            asyncio.to_thread(self._run_ytdlp_download, task_id, url, target_dir, file_name, format_id, cookies)
         )
 
         return task
@@ -114,26 +138,52 @@ class MediaExtractorEngine:
         url: str,
         target_dir: str,
         file_name: Optional[str],
-        format_id: Optional[str]
+        format_id: Optional[str],
+        cookies: Optional[str] = None
     ):
         task = self.tasks.get(task_id)
         if not task:
             return
 
+        url = clean_video_url(url)
+        if cookies:
+            self.save_cookies(cookies)
+
         task.status = TaskStatus.DOWNLOADING
         task.updated_at = time.time()
 
-        if not file_name or file_name == "Đang lấy tiêu đề video...":
-            try:
-                with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True}) as probe_ydl:
-                    info_probe = probe_ydl.extract_info(url, download=False)
-                    if info_probe and info_probe.get("title"):
-                        real_title = sanitize_filename(info_probe.get("title"))
-                        ext = "mp3" if format_id == "audio_only" else (info_probe.get("ext") or "mp4")
-                        task.file_name = f"{real_title}.{ext}"
-                        task.updated_at = time.time()
-            except Exception:
-                pass
+        probe_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "js_runtimes": {"node": {}},
+            "remote_components": ["ejs:github"],
+        }
+        if os.path.exists(self.cookie_file_path) and os.path.getsize(self.cookie_file_path) > 0:
+            probe_opts["cookiefile"] = self.cookie_file_path
+
+        is_audio_only = (format_id in ("audio_only", "bestaudio")) if format_id else False
+        reserved_paths = [
+            t.save_path for tid, t in self.tasks.items()
+            if tid != task_id and t.status in (TaskStatus.DOWNLOADING, TaskStatus.QUEUED) and t.save_path
+        ]
+
+        # 1. Tối ưu lựa chọn Format để ghép file siêu tốc:
+        # Ưu tiên ghép các luồng cùng chuẩn MP4 container (video mp4 + audio m4a) -> chỉ cần stream copy (-c copy), ghép xong trong 1 giây!
+        if is_audio_only:
+            selected_format = "bestaudio[ext=m4a]/bestaudio/best"
+        elif format_id:
+            if "+" in format_id or "best" in format_id:
+                selected_format = format_id
+            else:
+                selected_format = f"{format_id}+bestaudio[ext=m4a]/{format_id}+bestaudio/best"
+        else:
+            selected_format = (
+                "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
+                "bestvideo+bestaudio[ext=m4a]/"
+                "bestvideo[ext=mp4]+bestaudio/"
+                "bestvideo+bestaudio/best"
+            )
 
         pause_event = self._pause_events.get(task_id)
 
@@ -163,39 +213,40 @@ class MediaExtractorEngine:
                 task.speed_bps = speed
                 task.eta_seconds = eta
                 if task.total_bytes > 0:
-                    task.progress_percent = min(100.0, round((downloaded / task.total_bytes) * 100, 2))
+                    task.progress_percent = min(99.0, round((downloaded / task.total_bytes) * 100, 2))
                 task.updated_at = time.time()
             elif d.get("status") == "finished":
                 task.status = TaskStatus.MERGING
+                task.progress_percent = 99.0
+                task.speed_bps = 0.0
                 task.updated_at = time.time()
 
-        out_template = os.path.join(target_dir, file_name or "%(title)s.%(ext)s")
-
-        is_audio_only = False
-        if format_id:
-            if format_id in ("audio_only", "bestaudio"):
-                selected_format = "bestaudio/best"
-                is_audio_only = True
-            elif "+" in format_id or "best" in format_id:
-                selected_format = format_id
-            else:
-                selected_format = f"{format_id}+bestaudio/best"
-        else:
-            selected_format = "bestvideo+bestaudio/best"
-
+        # 2. Cấu hình FFmpeg & yt-dlp tối đa hóa hiệu năng (Multithreaded + Stream Copy + Node.js)
         ydl_opts = {
             "ffmpeg_location": self.ffmpeg_path,
-            "outtmpl": out_template,
             "format": selected_format,
             "progress_hooks": [progress_hook],
             "quiet": True,
             "no_warnings": True,
-            "concurrent_fragment_downloads": 16,
-            "http_chunk_size": 10485760,
-            "buffersize": 1048576,
+            "noplaylist": True,
+            "concurrent_fragment_downloads": 16,  # Tải song song 16 phân mảnh
+            "buffersize": 4194304,                 # Bộ đệm 4MB giảm 75% I/O ghi đĩa
             "retries": 10,
             "fragment_retries": 10,
+            "file_access_retries": 5,
+            "js_runtimes": {"node": {}},           # V8 engine từ Node.js cực nhanh
+            "remote_components": ["ejs:github"],
+            "overwrites": True,
+            "nooverwrites": False,
+            "nocheckcertificate": True,
+            # Tối ưu hóa Merger bằng toàn bộ luồng CPU và stream copy thuần túy
+            "postprocessor_args": {
+                "Merger": ["-c", "copy", "-threads", "0"],
+                "FFmpegExtractAudio": ["-threads", "0", "-preset", "ultrafast"]
+            }
         }
+        if os.path.exists(self.cookie_file_path) and os.path.getsize(self.cookie_file_path) > 0:
+            ydl_opts["cookiefile"] = self.cookie_file_path
 
         if is_audio_only:
             ydl_opts["postprocessors"] = [{
@@ -208,14 +259,41 @@ class MediaExtractorEngine:
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
+                # 🚀 TỐI ƯU 1-PASS: Trích xuất thông tin 1 lần duy nhất, tránh gọi 2 lần mạng mất 5-10s
+                info = ydl.extract_info(url, download=False)
+                if not info:
+                    raise Exception("Không thể lấy thông tin video từ đường dẫn này.")
+
+                real_title = sanitize_filename(info.get("title") or f"video_{int(time.time())}")
+                ext = ".mp3" if is_audio_only else ".mp4"
+
+                target_filename = file_name if (file_name and file_name != "Đang lấy tiêu đề video...") else f"{real_title}{ext}"
+                unique_path = get_unique_filepath(target_dir, target_filename, reserved_paths)
+
+                final_file_name = os.path.basename(unique_path)
+                base_no_ext, _ = os.path.splitext(final_file_name)
+
+                task.file_name = final_file_name
+                task.save_path = unique_path
+                task.updated_at = time.time()
+
+                out_template = os.path.join(target_dir, base_no_ext + ".%(ext)s")
+                ydl.params["outtmpl"] = {"default": out_template}
+
+                # Bắt đầu tải và ghép nối ngay lập tức bằng info đã trích xuất
+                ydl.process_ie_result(info, download=True)
+
                 final_filename = ydl.prepare_filename(info)
                 base, _ = os.path.splitext(final_filename)
-                
+
                 if is_audio_only and os.path.exists(f"{base}.mp3"):
                     final_filename = f"{base}.mp3"
                 elif os.path.exists(f"{base}.mp4"):
                     final_filename = f"{base}.mp4"
+                elif os.path.exists(f"{base}.mkv"):
+                    final_filename = f"{base}.mkv"
+                elif os.path.exists(f"{base}.webm"):
+                    final_filename = f"{base}.webm"
 
                 task.file_name = os.path.basename(final_filename)
                 task.save_path = final_filename
@@ -236,7 +314,11 @@ class MediaExtractorEngine:
                 self.tasks.pop(task_id, None)
             else:
                 task.status = TaskStatus.FAILED
-                task.error_message = str(e)
+                err_str = str(e)
+                if "Sign in to confirm you're not a bot" in err_str:
+                    task.error_message = "YouTube chặn bot. Hãy mở video và bấm nút tải từ Extension Chrome để tự động gửi Cookie xác minh!"
+                else:
+                    task.error_message = err_str
                 task.updated_at = time.time()
 
     def pause_task(self, task_id: str) -> bool:

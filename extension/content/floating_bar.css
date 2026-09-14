@@ -136,10 +136,67 @@
     background: transparent;
 }
 
-/* Hiển thị khi hover hoặc khi có class .open */
-.vortex-floating-container:hover .vortex-dropdown-menu,
-.vortex-floating-container.open .vortex-dropdown-menu {
+/* Hiển thị khi hover hoặc khi có class .open (chỉ khi không thu nhỏ) */
+.vortex-floating-container:not(.minimized):hover .vortex-dropdown-menu,
+.vortex-floating-container:not(.minimized).open .vortex-dropdown-menu {
     display: block !important;
+}
+
+/* Mini Badge khi thanh tải ở trạng thái thu nhỏ */
+.vortex-mini-badge {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 50%, #7c3aed 100%);
+    border: 1.5px solid rgba(255, 255, 255, 0.6);
+    box-shadow: 0 4px 16px rgba(14, 165, 233, 0.5), 0 0 12px rgba(124, 58, 237, 0.4);
+    cursor: pointer;
+    opacity: 0.7;
+    position: relative;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    user-select: none;
+}
+
+.vortex-mini-badge:hover {
+    opacity: 1;
+    transform: scale(1.12);
+    box-shadow: 0 6px 22px rgba(56, 189, 248, 0.85), 0 0 18px rgba(139, 92, 246, 0.75);
+    border-color: #ffffff;
+}
+
+.vortex-mini-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    object-fit: contain;
+    pointer-events: none;
+}
+
+.vortex-mini-dot {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 7px;
+    height: 7px;
+    background-color: #a6e3a1;
+    border: 1.5px solid #181825;
+    border-radius: 50%;
+    box-shadow: 0 0 6px #a6e3a1;
+    pointer-events: none;
+}
+
+/* Ẩn các thành phần đầy đủ khi thu nhỏ */
+.vortex-floating-container.minimized .vortex-btn-group,
+.vortex-floating-container.minimized .vortex-dropdown-menu {
+    display: none !important;
+}
+
+.vortex-floating-container.minimized .vortex-mini-badge {
+    display: flex !important;
+    animation: vortexPopIn 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .vortex-menu-item {
@@ -184,6 +241,50 @@
     height: 1px;
     background: rgba(255, 255, 255, 0.12);
     margin: 5px 6px;
+}
+
+.vortex-folder-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 10px;
+    background: rgba(30, 30, 46, 0.9);
+    border-radius: 6px;
+    margin: 4px 6px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.vortex-folder-icon {
+    font-size: 13px;
+    flex-shrink: 0;
+}
+
+.vortex-folder-text {
+    flex: 1;
+    font-size: 11px;
+    color: #cdd6f4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vortex-btn-change-folder {
+    background: #313244;
+    color: #89b4fa;
+    border: 1px solid #45475a;
+    border-radius: 4px;
+    padding: 2px 7px;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.2s ease;
+}
+
+.vortex-btn-change-folder:hover {
+    background: #89b4fa;
+    color: #11111b;
+    border-color: #89b4fa;
 }
 
 .vortex-menu-status {

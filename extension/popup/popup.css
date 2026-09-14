@@ -125,6 +125,68 @@ body {
     color: #89b4fa;
 }
 
+.btn-outline {
+    background: transparent;
+    color: #89b4fa;
+    border: 1px dashed rgba(137, 180, 250, 0.45);
+}
+
+.btn-outline:hover {
+    background: rgba(137, 180, 250, 0.12);
+    border-color: #89b4fa;
+    color: #b4befe;
+    transform: translateY(-1px);
+}
+
+.folder-config {
+    margin-top: 10px;
+    padding: 8px 10px;
+    background-color: #1e1e2e;
+    border-radius: 6px;
+    border: 1px solid #313244;
+}
+
+.folder-config .info-label {
+    margin-bottom: 6px;
+}
+
+.folder-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.folder-input {
+    flex: 1;
+    background-color: #181825;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 11px;
+    outline: none;
+}
+
+.folder-input:focus {
+    border-color: #89b4fa;
+}
+
+.btn-small {
+    background-color: #313244;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s ease;
+}
+
+.btn-small:hover {
+    background-color: #45475a;
+    border-color: #89b4fa;
+}
+
 .status-message {
     margin-top: 10px;
     font-size: 11px;

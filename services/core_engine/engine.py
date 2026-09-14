@@ -6,6 +6,7 @@ import urllib.parse
 from typing import Dict, Optional, List
 import aiohttp
 from common.schemas import DownloadTask, TaskStatus, EngineType, ChunkProgress
+from common.utils import get_unique_filepath, sanitize_filename
 
 class HttpRangeDownloadEngine:
     def __init__(self, default_download_dir: str = "downloads"):
@@ -94,11 +95,14 @@ class HttpRangeDownloadEngine:
         probe = await self.probe_url(url, headers)
         total_bytes = probe["content_length"]
         supports_range = probe["supports_range"]
-        final_filename = file_name or probe["filename"]
+        raw_filename = file_name or probe["filename"]
 
         target_dir = os.path.abspath(save_path) if save_path else self.download_dir
         os.makedirs(target_dir, exist_ok=True)
-        final_path = os.path.join(target_dir, final_filename)
+
+        reserved_paths = [t.save_path for t in self.tasks.values() if t.status in (TaskStatus.DOWNLOADING, TaskStatus.QUEUED) and t.save_path]
+        final_path = get_unique_filepath(target_dir, raw_filename, reserved_paths)
+        final_filename = os.path.basename(final_path)
 
         task_id = str(uuid.uuid4())[:8]
         now = time.time()
@@ -254,7 +258,7 @@ class HttpRangeDownloadEngine:
                 if os.path.exists(chunk_file):
                     with open(chunk_file, "rb") as infile:
                         while True:
-                            buf = infile.read(2097152)  # 2MB buffer ghép file siêu tốc
+                            buf = infile.read(16777216)  # 16MB buffer ghép file siêu tốc
                             if not buf:
                                 break
                             outfile.write(buf)
