@@ -9,17 +9,34 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTableWidget, QTableWidgetItem, QProgressBar,
     QHeaderView, QMessageBox, QMenu, QSystemTrayIcon, QStyle,
-    QApplication, QButtonGroup, QFileDialog, QCheckBox
+    QApplication, QButtonGroup, QFileDialog, QCheckBox, QFrame, QLineEdit
 )
 from PySide6.QtCore import Qt, Slot, QRectF
-from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QPainterPath, QGuiApplication, QCursor, QColor
+from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QPainterPath, QGuiApplication, QCursor, QColor, QPalette
 
 from client.desktop_gui.styles import DARK_THEME_QSS
 from client.desktop_gui.websocket_worker import WebSocketProgressWorker
 from client.desktop_gui.add_dialog import AddDownloadDialog, GATEWAY_URL
 from client.desktop_gui.loading_overlay import LoadingOverlay, AsyncActionWorker
+from common.utils import get_default_download_dir, is_autostart_enabled, set_autostart
 
 ICON_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "assets/vortex_icon.png"))
+
+def get_file_type_icon(filename: str) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in ('.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv', '.ts'):
+        return "🎬"
+    elif ext in ('.mp3', '.m4a', '.wav', '.flac', '.aac', '.ogg'):
+        return "🎵"
+    elif ext in ('.zip', '.rar', '.7z', '.tar', '.gz', '.bz2'):
+        return "📦"
+    elif ext in ('.iso', '.exe', '.msi', '.dmg', '.apk'):
+        return "💿"
+    elif ext in ('.pdf', '.doc', '.docx', '.xls', '.xlsx', '.txt'):
+        return "📄"
+    elif ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'):
+        return "🖼️"
+    return "📁"
 
 def format_bytes(num_bytes: int) -> str:
     if num_bytes <= 0:
@@ -50,9 +67,16 @@ def get_rounded_pixmap(image_path: str, size: int = 34, radius: float = 8.0) -> 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Vortex Downloader - IDM Microservices Engine")
-        self.resize(1060, 680)
+        self.setWindowTitle("Vortex Downloader - Modern High-Speed Engine")
+        self.resize(1140, 720)
         self.setStyleSheet(DARK_THEME_QSS)
+
+        palette = self.palette()
+        palette.setColor(QPalette.Window, QColor("#f8fafc"))
+        palette.setColor(QPalette.WindowText, QColor("#1e293b"))
+        palette.setColor(QPalette.Base, QColor("#ffffff"))
+        palette.setColor(QPalette.Text, QColor("#1e293b"))
+        self.setPalette(palette)
 
         if os.path.exists(ICON_PATH):
             self.setWindowIcon(QIcon(ICON_PATH))
@@ -61,6 +85,7 @@ class MainWindow(QMainWindow):
         self.all_tasks_cache: Dict[str, dict] = {}
         self.deleted_task_ids: Set[str] = set()
         self.current_filter = "all"
+        self.search_text = ""
         self.last_clipboard_text = ""
         self._action_workers = []
 
@@ -92,144 +117,247 @@ class MainWindow(QMainWindow):
 
     def _init_ui(self):
         central_widget = QWidget()
+        central_widget.setObjectName("centralWidget")
+        central_widget.setAutoFillBackground(True)
+        central_widget.setStyleSheet("#centralWidget { background-color: #f8fafc; }")
         self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(16, 16, 16, 16)
-        main_layout.setSpacing(12)
+        root_layout = QHBoxLayout(central_widget)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        # 1. Top Header Bar
-        header_layout = QHBoxLayout()
-        
+        # ==========================================
+        # 1. LEFT MODERN SIDEBAR
+        # ==========================================
+        sidebar = QWidget()
+        sidebar.setObjectName("sidebarWidget")
+        sidebar.setFixedWidth(240)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(16, 20, 16, 16)
+        sidebar_layout.setSpacing(8)
+
+        # Brand header
+        brand_layout = QHBoxLayout()
+        brand_layout.setSpacing(10)
         if os.path.exists(ICON_PATH):
             lbl_logo = QLabel()
-            lbl_logo.setPixmap(get_rounded_pixmap(ICON_PATH, 34, 8.5))
-            header_layout.addWidget(lbl_logo)
+            lbl_logo.setPixmap(get_rounded_pixmap(ICON_PATH, 32, 8.0))
+            brand_layout.addWidget(lbl_logo)
 
-        title_label = QLabel("VORTEX DOWNLOADER")
-        title_label.setStyleSheet("font-size: 19px; font-weight: bold; color: #89b4fa; letter-spacing: 1.5px; margin-left: 8px;")
-        header_layout.addWidget(title_label)
+        brand_info = QVBoxLayout()
+        brand_info.setSpacing(1)
+        title_label = QLabel("VORTEX")
+        title_label.setStyleSheet("font-size: 17px; font-weight: 800; color: #0f172a; letter-spacing: 1px;")
+        subtitle_label = QLabel("IDM ENGINE PRO")
+        subtitle_label.setStyleSheet("font-size: 10px; font-weight: 700; color: #2563eb; letter-spacing: 0.8px;")
+        brand_info.addWidget(title_label)
+        brand_info.addWidget(subtitle_label)
+        brand_layout.addLayout(brand_info)
+        brand_layout.addStretch()
+        sidebar_layout.addLayout(brand_layout)
 
-        header_layout.addStretch()
+        sidebar_layout.addSpacing(10)
 
-        self.lbl_speed = QLabel("⚡ 0.0 MB/s")
-        self.lbl_speed.setStyleSheet("background-color: #313244; color: #a6e3a1; font-weight: bold; padding: 4px 14px; border-radius: 12px; font-size: 13px;")
-        header_layout.addWidget(self.lbl_speed)
-
-        self.lbl_status = QLabel("● Kết nối Gateway")
-        self.lbl_status.setStyleSheet("color: #f9e2af; font-weight: bold; margin-left: 10px;")
-        header_layout.addWidget(self.lbl_status)
-        main_layout.addLayout(header_layout)
-
-        # 2. Action Toolbar & Filter Tabs
-        toolbar_layout = QHBoxLayout()
-        toolbar_layout.setSpacing(10)
-
-        self.btn_add = QPushButton("＋ Thêm URL")
-        self.btn_add.setObjectName("btnPrimary")
+        # Main Action Button: New Download
+        self.btn_add = QPushButton("＋  Thêm liên kết mới")
+        self.btn_add.setObjectName("sidebarAddButton")
+        self.btn_add.setCursor(Qt.PointingHandCursor)
+        self.btn_add.setStyleSheet("""
+            QPushButton#sidebarAddButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #2563eb);
+                background-color: #2563eb;
+                color: #ffffff;
+                border: 1px solid #1d4ed8;
+                border-radius: 9px;
+                padding: 11px 16px;
+                font-weight: 700;
+                font-size: 13.5px;
+                text-align: center;
+            }
+            QPushButton#sidebarAddButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563eb, stop:1 #1d4ed8);
+                background-color: #1d4ed8;
+            }
+            QPushButton#sidebarAddButton:pressed {
+                background-color: #1e40af;
+            }
+        """)
         self.btn_add.clicked.connect(self._open_add_dialog)
-        toolbar_layout.addWidget(self.btn_add)
+        sidebar_layout.addWidget(self.btn_add)
 
-        self.btn_open_folder = QPushButton("📁 Thư mục tải về")
+        sidebar_layout.addSpacing(12)
+
+        # Section Header
+        lbl_nav = QLabel("DANH MỤC")
+        lbl_nav.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 800; letter-spacing: 1px; padding-left: 4px;")
+        sidebar_layout.addWidget(lbl_nav)
+
+        # Navigation Filters
+        self.btn_filter_all = QPushButton("📥  Tất cả tệp (0)")
+        self.btn_filter_downloading = QPushButton("⚡  Đang tải (0)")
+        self.btn_filter_completed = QPushButton("✅  Đã hoàn thành (0)")
+        self.btn_filter_paused = QPushButton("⏸  Tạm dừng (0)")
+        self.btn_filter_failed = QPushButton("⚠️  Lỗi / Thất bại (0)")
+
+        self.filter_group = QButtonGroup(self)
+        for btn in [self.btn_filter_all, self.btn_filter_downloading, self.btn_filter_completed, self.btn_filter_paused, self.btn_filter_failed]:
+            btn.setObjectName("sidebarNavButton")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            self.filter_group.addButton(btn)
+            sidebar_layout.addWidget(btn)
+
+        self.btn_filter_all.setChecked(True)
+        self.btn_filter_all.clicked.connect(lambda: self._set_filter("all"))
+        self.btn_filter_downloading.clicked.connect(lambda: self._set_filter("downloading"))
+        self.btn_filter_completed.clicked.connect(lambda: self._set_filter("completed"))
+        self.btn_filter_paused.clicked.connect(lambda: self._set_filter("paused"))
+        self.btn_filter_failed.clicked.connect(lambda: self._set_filter("failed"))
+
+        sidebar_layout.addStretch()
+
+        # Tools & Settings Section
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("background-color: #e2e8f0; max-height: 1px;")
+        sidebar_layout.addWidget(sep)
+
+        lbl_tools = QLabel("CÔNG CỤ & CÀI ĐẶT")
+        lbl_tools.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 800; letter-spacing: 1px; padding-left: 4px;")
+        sidebar_layout.addWidget(lbl_tools)
+
+        self.btn_open_folder = QPushButton("📂  Thư mục tải về")
+        self.btn_open_folder.setObjectName("sidebarSubButton")
+        self.btn_open_folder.setCursor(Qt.PointingHandCursor)
         self.btn_open_folder.clicked.connect(self._open_downloads_root_folder)
-        toolbar_layout.addWidget(self.btn_open_folder)
+        sidebar_layout.addWidget(self.btn_open_folder)
 
-        self.btn_change_folder = QPushButton("⚙ Đổi thư mục")
+        self.btn_change_folder = QPushButton("⚙  Đổi thư mục lưu")
+        self.btn_change_folder.setObjectName("sidebarSubButton")
+        self.btn_change_folder.setCursor(Qt.PointingHandCursor)
         self.btn_change_folder.setToolTip("Chọn thư mục lưu tải về mặc định cho máy tính")
         self.btn_change_folder.clicked.connect(self._change_default_download_folder)
-        toolbar_layout.addWidget(self.btn_change_folder)
+        sidebar_layout.addWidget(self.btn_change_folder)
 
-        self.btn_cookies = QPushButton("🍪 Cookies YouTube")
+        self.btn_cookies = QPushButton("🍪  Cookies YouTube")
+        self.btn_cookies.setObjectName("sidebarSubButton")
+        self.btn_cookies.setCursor(Qt.PointingHandCursor)
         self.btn_cookies.setToolTip("Nhập tệp cookies.txt từ trình duyệt để vượt qua cơ chế chặn bot của YouTube")
         self.btn_cookies.clicked.connect(self._import_cookies_dialog)
-        toolbar_layout.addWidget(self.btn_cookies)
+        sidebar_layout.addWidget(self.btn_cookies)
 
-        toolbar_layout.addStretch()
+        self.chk_autostart = QCheckBox("🚀 Khởi động cùng Windows")
+        self.chk_autostart.setToolTip("Tự động mở Vortex Downloader ở khay hệ thống khi máy tính khởi động")
+        self.chk_autostart.setChecked(is_autostart_enabled())
+        self.chk_autostart.toggled.connect(self._toggle_autostart)
+        sidebar_layout.addWidget(self.chk_autostart)
 
-        # Batch action buttons
+        sidebar_layout.addSpacing(6)
+
+        # Connection status pill
+        self.lbl_status = QLabel("● Đang kết nối Gateway...")
+        self.lbl_status.setStyleSheet("background-color: #fef3c7; color: #92400e; border: 1px solid #fde68a; border-radius: 12px; padding: 6px 12px; font-weight: 700; font-size: 11.5px;")
+        self.lbl_status.setAlignment(Qt.AlignCenter)
+        sidebar_layout.addWidget(self.lbl_status)
+
+        root_layout.addWidget(sidebar)
+
+        # ==========================================
+        # 2. MAIN CONTENT AREA (RIGHT)
+        # ==========================================
+        main_content = QWidget()
+        main_content.setObjectName("mainContentWidget")
+        main_content.setAutoFillBackground(True)
+        main_content.setStyleSheet("#mainContentWidget { background-color: #f8fafc; }")
+        content_layout = QVBoxLayout(main_content)
+        content_layout.setContentsMargins(24, 20, 24, 18)
+        content_layout.setSpacing(14)
+
+        # Top Bar
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(12)
+
+        self.lbl_view_title = QLabel("Tất cả tệp tin")
+        self.lbl_view_title.setStyleSheet("font-size: 20px; font-weight: 800; color: #0f172a;")
+        top_bar.addWidget(self.lbl_view_title)
+
+        top_bar.addStretch()
+
+        # Search box
+        self.search_input = QLineEdit()
+        self.search_input.setObjectName("searchBar")
+        self.search_input.setPlaceholderText("🔍  Tìm kiếm tệp...")
+        self.search_input.setFixedWidth(220)
+        self.search_input.textChanged.connect(self._on_search_changed)
+        top_bar.addWidget(self.search_input)
+
+        # Real-time speed badge
+        self.lbl_speed = QLabel("⚡ 0.0 MB/s")
+        self.lbl_speed.setStyleSheet("background-color: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; font-weight: 700; padding: 5px 14px; border-radius: 14px; font-size: 13px;")
+        top_bar.addWidget(self.lbl_speed)
+
+        # Batch Selection Buttons
         self.btn_select_all = QPushButton("☑ Chọn tất cả")
         self.btn_select_all.clicked.connect(self._select_all_tasks)
-        toolbar_layout.addWidget(self.btn_select_all)
+        top_bar.addWidget(self.btn_select_all)
 
         self.btn_delete_selected = QPushButton("🗑 Xoá đã chọn")
         self.btn_delete_selected.setObjectName("btnDanger")
         self.btn_delete_selected.clicked.connect(self._delete_selected_batch)
         self.btn_delete_selected.setVisible(False)
-        toolbar_layout.addWidget(self.btn_delete_selected)
+        top_bar.addWidget(self.btn_delete_selected)
 
-        self.btn_filter_all = QPushButton("Tất cả (Lịch sử)")
-        self.btn_filter_downloading = QPushButton("⚡ Đang tải")
-        self.btn_filter_completed = QPushButton("✅ Hoàn tất")
-        self.btn_filter_failed = QPushButton("⚠ Lỗi")
-        self.btn_filter_paused = QPushButton("⏸ Tạm dừng")
+        content_layout.addLayout(top_bar)
 
-        for btn in [self.btn_filter_all, self.btn_filter_downloading, self.btn_filter_completed, self.btn_filter_failed, self.btn_filter_paused]:
-            btn.setCheckable(True)
-            toolbar_layout.addWidget(btn)
-
-        self.btn_filter_all.setChecked(True)
-        self.btn_filter_all.setStyleSheet("background-color: #89b4fa; color: #11111b;")
-
-        self.filter_group = QButtonGroup(self)
-        self.filter_group.addButton(self.btn_filter_all)
-        self.filter_group.addButton(self.btn_filter_downloading)
-        self.filter_group.addButton(self.btn_filter_completed)
-        self.filter_group.addButton(self.btn_filter_failed)
-        self.filter_group.addButton(self.btn_filter_paused)
-
-        self.btn_filter_all.clicked.connect(lambda: self._set_filter("all"))
-        self.btn_filter_downloading.clicked.connect(lambda: self._set_filter("downloading"))
-        self.btn_filter_completed.clicked.connect(lambda: self._set_filter("completed"))
-        self.btn_filter_failed.clicked.connect(lambda: self._set_filter("failed"))
-        self.btn_filter_paused.clicked.connect(lambda: self._set_filter("paused"))
-
-        main_layout.addLayout(toolbar_layout)
-
-        # 3. Main Tasks Table (7 columns: checkbox + 6 data columns)
-        self.table = QTableWidget(0, 7)
+        # Modern Tasks Table (8 columns)
+        self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels([
-            "", "Tên Tệp", "Dung lượng", "Tiến độ", "Tốc độ", "Thời gian còn", "Trạng thái"
+            "", "Tên tệp tin", "Dung lượng", "Tiến độ", "Tốc độ", "Còn lại", "Trạng thái", "Thao tác"
         ])
+        self.table.setShowGrid(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
-        self.table.setColumnWidth(0, 36)
+        self.table.setColumnWidth(0, 50)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
-        self.table.setColumnWidth(3, 220)
+        self.table.setColumnWidth(3, 190)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Fixed)
+        self.table.setColumnWidth(6, 130)
+        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Fixed)
+        self.table.setColumnWidth(7, 130)
+        self.table.verticalHeader().setDefaultSectionSize(50)
+        self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
-        self.table.verticalHeader().setVisible(False)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
         self.table.cellDoubleClicked.connect(self._on_table_double_clicked)
-        main_layout.addWidget(self.table)
+        content_layout.addWidget(self.table)
 
-        # 4. Batch Action Bar (bottom)
-        batch_bar = QHBoxLayout()
-        batch_bar.setSpacing(8)
+        # Bottom Bar
+        bottom_bar = QHBoxLayout()
+        self.lbl_task_stats = QLabel("0 tiến trình tải")
+        self.lbl_task_stats.setStyleSheet("color: #64748b; font-weight: 600; font-size: 12.5px;")
+        bottom_bar.addWidget(self.lbl_task_stats)
 
-        self.btn_delete_completed = QPushButton("✅ Xoá tất cả Hoàn tất")
+        bottom_bar.addStretch()
+
+        self.btn_delete_completed = QPushButton("✅ Dọn dẹp Hoàn tất")
         self.btn_delete_completed.setObjectName("btnDanger")
         self.btn_delete_completed.clicked.connect(self._delete_all_completed)
-        batch_bar.addWidget(self.btn_delete_completed)
+        bottom_bar.addWidget(self.btn_delete_completed)
 
-        self.btn_delete_failed = QPushButton("⚠ Xoá tất cả Lỗi")
+        self.btn_delete_failed = QPushButton("⚠️ Xoá mục Lỗi")
         self.btn_delete_failed.setObjectName("btnDanger")
         self.btn_delete_failed.clicked.connect(self._delete_all_failed)
-        batch_bar.addWidget(self.btn_delete_failed)
+        bottom_bar.addWidget(self.btn_delete_failed)
 
-        batch_bar.addStretch()
-        main_layout.addLayout(batch_bar)
+        content_layout.addLayout(bottom_bar)
+        root_layout.addWidget(main_content, 1)
 
     def _set_filter(self, filter_name: str):
         self.current_filter = filter_name
-        for btn in [self.btn_filter_all, self.btn_filter_downloading, self.btn_filter_completed, self.btn_filter_failed, self.btn_filter_paused]:
-            if btn.isChecked():
-                btn.setStyleSheet("background-color: #89b4fa; color: #11111b;")
-            else:
-                btn.setStyleSheet("")
         self._render_filtered_tasks()
 
     def _init_system_tray(self):
@@ -239,11 +367,20 @@ class MainWindow(QMainWindow):
         else:
             self.tray.setIcon(self.style().standardIcon(QStyle.SP_ArrowDown))
         
+        self.tray.activated.connect(self._on_tray_activated)
+
         tray_menu = QMenu()
         act_show = tray_menu.addAction("Mở Vortex Downloader")
-        act_show.triggered.connect(self.showNormal)
+        act_show.triggered.connect(self._restore_window)
         act_add = tray_menu.addAction("Thêm URL mới...")
         act_add.triggered.connect(self._open_add_dialog)
+        tray_menu.addSeparator()
+
+        self.act_autostart = tray_menu.addAction("Khởi động cùng Windows")
+        self.act_autostart.setCheckable(True)
+        self.act_autostart.setChecked(is_autostart_enabled())
+        self.act_autostart.toggled.connect(self._toggle_autostart)
+
         tray_menu.addSeparator()
         act_quit = tray_menu.addAction("Thoát hoàn toàn")
         act_quit.triggered.connect(self._quit_app)
@@ -291,10 +428,134 @@ class MainWindow(QMainWindow):
     def _on_connection_change(self, is_online: bool):
         if is_online:
             self.lbl_status.setText("● Gateway Online")
-            self.lbl_status.setStyleSheet("color: #a6e3a1; font-weight: bold; margin-left: 10px;")
+            self.lbl_status.setStyleSheet("background-color: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; border-radius: 12px; padding: 6px 12px; font-weight: 700; font-size: 11.5px;")
         else:
-            self.lbl_status.setText("○ Đang kết nối Gateway...")
-            self.lbl_status.setStyleSheet("color: #f38ba8; font-weight: bold; margin-left: 10px;")
+            self.lbl_status.setText("○ Mất kết nối Gateway")
+            self.lbl_status.setStyleSheet("background-color: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; border-radius: 12px; padding: 6px 12px; font-weight: 700; font-size: 11.5px;")
+
+    def _create_status_pill(self, status: str, err_msg: Optional[str] = None) -> QWidget:
+        w = QWidget()
+        l = QHBoxLayout(w)
+        l.setContentsMargins(4, 4, 4, 4)
+        l.setAlignment(Qt.AlignCenter)
+        lbl = QLabel()
+        lbl.setAlignment(Qt.AlignCenter)
+        status_upper = status.upper()
+
+        if status_upper == "COMPLETED":
+            lbl.setText("✓ Hoàn tất")
+            lbl.setStyleSheet("background-color: #dcfce7; color: #15803d; font-weight: 700; font-size: 11px; padding: 4px 11px; border-radius: 9px;")
+        elif status_upper == "FAILED":
+            lbl.setText("⚠️ Lỗi")
+            lbl.setStyleSheet("background-color: #fee2e2; color: #b91c1c; font-weight: 700; font-size: 11px; padding: 4px 11px; border-radius: 9px;")
+            if err_msg:
+                lbl.setToolTip(f"Chi tiết: {err_msg}")
+        elif status_upper == "MERGING":
+            lbl.setText("⚡ Ghép nối")
+            lbl.setStyleSheet("background-color: #fef3c7; color: #b45309; font-weight: 700; font-size: 11px; padding: 4px 11px; border-radius: 9px;")
+        elif status_upper == "PAUSED":
+            lbl.setText("⏸ Tạm dừng")
+            lbl.setStyleSheet("background-color: #f1f5f9; color: #475569; font-weight: 700; font-size: 11px; padding: 4px 11px; border-radius: 9px;")
+        elif status_upper == "DOWNLOADING":
+            lbl.setText("● Đang tải")
+            lbl.setStyleSheet("background-color: #eff6ff; color: #1d4ed8; font-weight: 700; font-size: 11px; padding: 4px 11px; border-radius: 9px;")
+        else:
+            lbl.setText(f"○ {status}")
+            lbl.setStyleSheet("background-color: #f1f5f9; color: #64748b; font-weight: 700; font-size: 11px; padding: 4px 11px; border-radius: 9px;")
+
+        l.addWidget(lbl)
+        return w
+
+    def _create_actions_widget(self, task_id: str, status: str) -> QWidget:
+        w = QWidget()
+        l = QHBoxLayout(w)
+        l.setContentsMargins(2, 2, 2, 2)
+        l.setSpacing(4)
+        l.setAlignment(Qt.AlignCenter)
+        status_upper = status.upper()
+
+        # 1. Folder button
+        btn_folder = QPushButton("📂")
+        btn_folder.setObjectName("rowActionBtn")
+        btn_folder.setToolTip("Mở thư mục")
+        btn_folder.setFixedSize(28, 28)
+        btn_folder.clicked.connect(lambda _, tid=task_id: self._open_folder_for_id(tid))
+        l.addWidget(btn_folder)
+
+        # 2. Pause / Resume button
+        if status_upper == "DOWNLOADING":
+            btn_pause = QPushButton("⏸")
+            btn_pause.setObjectName("rowActionBtn")
+            btn_pause.setToolTip("Tạm dừng")
+            btn_pause.setFixedSize(28, 28)
+            btn_pause.clicked.connect(lambda _, tid=task_id: self._pause_task_by_id(tid))
+            l.addWidget(btn_pause)
+        elif status_upper in ("PAUSED", "FAILED"):
+            btn_resume = QPushButton("▶")
+            btn_resume.setObjectName("rowActionBtn")
+            btn_resume.setToolTip("Tiếp tục / Tải lại")
+            btn_resume.setFixedSize(28, 28)
+            btn_resume.clicked.connect(lambda _, tid=task_id: self._resume_task_by_id(tid))
+            l.addWidget(btn_resume)
+
+        # 3. Delete button
+        btn_del = QPushButton("✕")
+        btn_del.setObjectName("rowActionDanger")
+        btn_del.setToolTip("Xoá tác vụ")
+        btn_del.setFixedSize(28, 28)
+        btn_del.clicked.connect(lambda _, tid=task_id: self._delete_task_by_id(tid))
+        l.addWidget(btn_del)
+
+        return w
+
+    def _on_search_changed(self, text: str):
+        self.search_text = text
+        self._render_filtered_tasks()
+
+    def _pause_task_by_id(self, task_id: str):
+        if not task_id:
+            return
+        if task_id in self.all_tasks_cache:
+            self.all_tasks_cache[task_id]["status"] = "paused"
+            self.all_tasks_cache[task_id]["speed_bps"] = 0.0
+            self._render_filtered_tasks()
+        def _do():
+            with httpx.Client(timeout=4.0) as client:
+                client.post(f"{GATEWAY_URL}/api/v1/tasks/{task_id}/pause")
+        self._run_with_loading("Đang tạm dừng tác vụ...", _do)
+
+    def _resume_task_by_id(self, task_id: str):
+        if not task_id:
+            return
+        if task_id in self.all_tasks_cache:
+            self.all_tasks_cache[task_id]["status"] = "downloading"
+            self._render_filtered_tasks()
+        def _do():
+            with httpx.Client(timeout=4.0) as client:
+                client.post(f"{GATEWAY_URL}/api/v1/tasks/{task_id}/resume")
+        self._run_with_loading("Đang tiếp tục tải...", _do)
+
+    def _open_folder_for_id(self, task_id: str):
+        task = self.all_tasks_cache.get(task_id)
+        if task:
+            path = task.get("save_path")
+            if path:
+                folder = os.path.dirname(path) if os.path.isfile(path) else path
+                if os.path.exists(folder):
+                    subprocess.Popen(f'explorer "{folder}"')
+                    return
+        self._open_downloads_root_folder()
+
+    def _delete_task_by_id(self, task_id: str):
+        confirm = QMessageBox.question(
+            self,
+            "Xác nhận xoá",
+            "Bạn có chắc muốn xoá tác vụ này khỏi danh sách?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if confirm == QMessageBox.Yes:
+            self._delete_batch([task_id])
 
     @Slot(dict)
     def _on_progress_update(self, data: dict):
@@ -366,6 +627,29 @@ class MainWindow(QMainWindow):
             pass
 
     def _render_filtered_tasks(self):
+        # 1. Cập nhật số lượng trên các nút danh mục Sidebar
+        all_cnt = len([t for t in self.all_tasks_cache.values() if t.get("id") not in self.deleted_task_ids])
+        dl_cnt = len([t for t in self.all_tasks_cache.values() if t.get("id") not in self.deleted_task_ids and str(t.get("status", "")).lower() in ("downloading", "queued", "merging")])
+        comp_cnt = len([t for t in self.all_tasks_cache.values() if t.get("id") not in self.deleted_task_ids and str(t.get("status", "")).lower() == "completed"])
+        pause_cnt = len([t for t in self.all_tasks_cache.values() if t.get("id") not in self.deleted_task_ids and str(t.get("status", "")).lower() == "paused"])
+        fail_cnt = len([t for t in self.all_tasks_cache.values() if t.get("id") not in self.deleted_task_ids and str(t.get("status", "")).lower() == "failed"])
+
+        self.btn_filter_all.setText(f"📥  Tất cả tệp ({all_cnt})")
+        self.btn_filter_downloading.setText(f"⚡  Đang tải ({dl_cnt})")
+        self.btn_filter_completed.setText(f"✅  Đã hoàn thành ({comp_cnt})")
+        self.btn_filter_paused.setText(f"⏸  Tạm dừng ({pause_cnt})")
+        self.btn_filter_failed.setText(f"⚠️  Lỗi ({fail_cnt})")
+
+        titles = {
+            "all": f"Tất cả tệp tin ({all_cnt})",
+            "downloading": f"Đang tải xuống ({dl_cnt})",
+            "completed": f"Đã hoàn thành ({comp_cnt})",
+            "paused": f"Tạm dừng ({pause_cnt})",
+            "failed": f"Tải thất bại ({fail_cnt})"
+        }
+        self.lbl_view_title.setText(titles.get(self.current_filter, "Danh sách tải xuống"))
+
+        # 2. Lọc danh sách theo filter và ô tìm kiếm
         filtered = []
         for t in self.all_tasks_cache.values():
             tid = t.get("id")
@@ -383,7 +667,12 @@ class MainWindow(QMainWindow):
             elif self.current_filter == "paused" and status == "paused":
                 filtered.append(t)
 
+        search = getattr(self, "search_text", "").strip().lower()
+        if search:
+            filtered = [t for t in filtered if search in t.get("file_name", "").lower()]
+
         filtered.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+        self.lbl_task_stats.setText(f"{len(filtered)} tiến trình tải")
 
         current_ids = [t["id"] for t in filtered]
         existing_ids = list(self.tasks_row_map.keys())
@@ -391,6 +680,11 @@ class MainWindow(QMainWindow):
         if current_ids != existing_ids:
             self.table.setRowCount(0)
             self.tasks_row_map.clear()
+            if hasattr(self, "_row_status_cache"):
+                self._row_status_cache.clear()
+
+        if not hasattr(self, "_row_status_cache"):
+            self._row_status_cache = {}
 
         for idx, t in enumerate(filtered):
             task_id = t["id"]
@@ -400,82 +694,93 @@ class MainWindow(QMainWindow):
             speed = t.get("speed_bps", 0.0)
             eta = t.get("eta_seconds")
             status = str(t.get("status", "queued")).upper()
+            icon = get_file_type_icon(filename)
+            display_name = f"{icon}  {filename}"
+
+            speed_str = "Ghép nối ⚡" if status == "MERGING" else (f"{format_bytes(int(speed))}/s" if speed > 0 else "--")
+            eta_str = "Sắp xong" if status == "MERGING" else (f"{int(eta)}s" if (eta is not None and speed > 0) else "--")
+            status_cache_key = f"{status}_{t.get('error_message')}"
 
             if task_id not in self.tasks_row_map:
                 row = self.table.rowCount()
                 self.table.insertRow(row)
                 self.tasks_row_map[task_id] = row
+                self._row_status_cache[task_id] = status_cache_key
 
                 # Cột 0: Checkbox
                 cb_widget = QWidget()
+                cb_widget.setStyleSheet("background-color: transparent;")
                 cb_layout = QHBoxLayout(cb_widget)
                 cb_layout.setContentsMargins(0, 0, 0, 0)
                 cb_layout.setAlignment(Qt.AlignCenter)
                 cb = QCheckBox()
+                cb.setObjectName("tableCheckbox")
+                cb.setFixedSize(26, 26)
+                cb.setCursor(Qt.PointingHandCursor)
                 cb.setProperty("task_id", task_id)
                 cb.stateChanged.connect(self._on_checkbox_changed)
                 cb_layout.addWidget(cb)
                 self.table.setCellWidget(row, 0, cb_widget)
 
-                item_name = QTableWidgetItem(filename)
+                # Cột 1: Tên tệp
+                item_name = QTableWidgetItem(display_name)
                 item_name.setData(Qt.UserRole, task_id)
                 self.table.setItem(row, 1, item_name)
+
+                # Cột 2: Dung lượng
                 self.table.setItem(row, 2, QTableWidgetItem(format_bytes(total_bytes)))
 
+                # Cột 3: Tiến độ
                 pbar = QProgressBar()
                 pbar.setValue(int(progress))
                 self.table.setCellWidget(row, 3, pbar)
 
-                speed_str = "Ghép nối ⚡" if status == "MERGING" else (f"{format_bytes(int(speed))}/s" if speed > 0 else "--")
-                self.table.setItem(row, 4, QTableWidgetItem(speed_str))
+                # Cột 4: Tốc độ
+                item_speed = QTableWidgetItem(speed_str)
+                if speed > 0:
+                    item_speed.setForeground(QColor("#059669"))
+                self.table.setItem(row, 4, item_speed)
 
-                eta_str = "Sắp xong" if status == "MERGING" else (f"{int(eta)}s" if (eta is not None and speed > 0) else "--")
+                # Cột 5: Còn lại
                 self.table.setItem(row, 5, QTableWidgetItem(eta_str))
 
-                status_item = QTableWidgetItem(status)
-                err_msg = t.get("error_message")
-                if err_msg:
-                    status_item.setToolTip(f"Chi tiết: {err_msg}")
-                if status == "FAILED":
-                    status_item.setForeground(QColor("#f38ba8"))
-                    status_item.setText("FAILED ⚠️")
-                elif status == "COMPLETED":
-                    status_item.setForeground(QColor("#a6e3a1"))
-                elif status == "MERGING":
-                    status_item.setForeground(QColor("#f9e2af"))
-                    status_item.setText("⚡ Ghép nối (FFmpeg)")
-                self.table.setItem(row, 6, status_item)
+                # Cột 6: Trạng thái (Pill badge)
+                self.table.setCellWidget(row, 6, self._create_status_pill(status, t.get("error_message")))
+
+                # Cột 7: Thao tác
+                self.table.setCellWidget(row, 7, self._create_actions_widget(task_id, status))
             else:
                 row = self.tasks_row_map[task_id]
-                self.table.item(row, 1).setText(filename)
-                self.table.item(row, 2).setText(format_bytes(total_bytes))
+                item_name = self.table.item(row, 1)
+                if item_name and item_name.text() != display_name:
+                    item_name.setText(display_name)
+
+                size_str = format_bytes(total_bytes)
+                item_size = self.table.item(row, 2)
+                if item_size and item_size.text() != size_str:
+                    item_size.setText(size_str)
 
                 pbar = self.table.cellWidget(row, 3)
-                if pbar:
+                if pbar and pbar.value() != int(progress):
                     pbar.setValue(int(progress))
 
-                speed_str = "Ghép nối ⚡" if status == "MERGING" else (f"{format_bytes(int(speed))}/s" if speed > 0 else "--")
-                self.table.item(row, 4).setText(speed_str)
+                item_speed = self.table.item(row, 4)
+                if item_speed and item_speed.text() != speed_str:
+                    item_speed.setText(speed_str)
+                    if speed > 0:
+                        item_speed.setForeground(QColor("#059669"))
+                    else:
+                        item_speed.setForeground(QColor("#1e293b"))
 
-                eta_str = "Sắp xong" if status == "MERGING" else (f"{int(eta)}s" if (eta is not None and speed > 0) else "--")
-                self.table.item(row, 5).setText(eta_str)
+                item_eta = self.table.item(row, 5)
+                if item_eta and item_eta.text() != eta_str:
+                    item_eta.setText(eta_str)
 
-                status_item = self.table.item(row, 6)
-                err_msg = t.get("error_message")
-                if err_msg:
-                    status_item.setToolTip(f"Chi tiết: {err_msg}")
-                if status == "FAILED":
-                    status_item.setForeground(QColor("#f38ba8"))
-                    status_item.setText("FAILED ⚠️")
-                elif status == "COMPLETED":
-                    status_item.setForeground(QColor("#a6e3a1"))
-                    status_item.setText(status)
-                elif status == "MERGING":
-                    status_item.setForeground(QColor("#f9e2af"))
-                    status_item.setText("⚡ Ghép nối (FFmpeg)")
-                else:
-                    status_item.setForeground(QColor("#cdd6f4"))
-                    status_item.setText(status)
+                # CHỈ cập nhật widget Cột 6 và Cột 7 khi trạng thái thực sự thay đổi!
+                if self._row_status_cache.get(task_id) != status_cache_key:
+                    self._row_status_cache[task_id] = status_cache_key
+                    self.table.setCellWidget(row, 6, self._create_status_pill(status, t.get("error_message")))
+                    self.table.setCellWidget(row, 7, self._create_actions_widget(task_id, status))
 
         self._update_batch_button_visibility()
 
@@ -729,7 +1034,7 @@ class MainWindow(QMainWindow):
                         return data["default_download_dir"]
         except Exception:
             pass
-        default_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../downloads"))
+        default_dir = get_default_download_dir()
         os.makedirs(default_dir, exist_ok=True)
         return default_dir
 
@@ -888,6 +1193,33 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Lỗi", f"Không thể gửi lệnh tải lại: {err}")
 
         self._run_with_loading("Đang gửi yêu cầu tải lại...", _do_retry, _on_retried)
+
+    def _on_tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self._restore_window()
+
+    def _restore_window(self):
+        self.showNormal()
+        self.activateWindow()
+
+    def _toggle_autostart(self, checked: bool):
+        # Đồng bộ cả 2 điều khiển (checkbox trên thanh công cụ và mục trong khay hệ thống)
+        if hasattr(self, "chk_autostart") and self.chk_autostart.isChecked() != checked:
+            self.chk_autostart.blockSignals(True)
+            self.chk_autostart.setChecked(checked)
+            self.chk_autostart.blockSignals(False)
+
+        if hasattr(self, "act_autostart") and self.act_autostart.isChecked() != checked:
+            self.act_autostart.blockSignals(True)
+            self.act_autostart.setChecked(checked)
+            self.act_autostart.blockSignals(False)
+
+        ok = set_autostart(checked)
+        if ok:
+            msg = "Đã bật tự khởi động cùng Windows (chạy ngầm khay hệ thống)." if checked else "Đã tắt tự khởi động cùng Windows."
+            self.tray.showMessage("Vortex Downloader", msg, QSystemTrayIcon.Information, 2000)
+        else:
+            QMessageBox.warning(self, "Cảnh báo", "Không thể ghi cấu hình Registry khởi động cùng Windows.")
 
     def closeEvent(self, event):
         if self.tray.isVisible():

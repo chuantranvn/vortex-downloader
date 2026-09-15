@@ -8,16 +8,17 @@ from PySide6.QtWidgets import (
     QPushButton, QSpinBox, QComboBox, QFileDialog, QMessageBox
 )
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QPalette, QColor
 
-from common.utils import clean_video_url
+from common.utils import clean_video_url, get_default_download_dir
 from client.desktop_gui.loading_overlay import LoadingOverlay
+from client.desktop_gui.styles import LIGHT_THEME_QSS
 
 GATEWAY_URL = "http://localhost:8000"
 ICON_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "assets/vortex_icon.png"))
 
 STANDARD_PRESETS = [
-    ("🌟 Tự động chọn chất lượng cao nhất (Best Quality)", "bestvideo+bestaudio/best"),
+    ("🌟 Giữ nguyên định dạng & chất lượng gốc (Original Best)", "bestvideo+bestaudio/best"),
     ("🎬 4320p (8K UHD)", "bestvideo[height<=4320]+bestaudio/best"),
     ("🎬 2160p (4K UHD)", "bestvideo[height<=2160]+bestaudio/best"),
     ("🎬 1440p (2K QHD)", "bestvideo[height<=1440]+bestaudio/best"),
@@ -97,13 +98,23 @@ class AddDownloadDialog(QDialog):
         initial_title: Optional[str] = None
     ):
         super().__init__(parent)
+        self.setObjectName("addDownloadDialog")
         self.setWindowTitle("Thêm URL Tải Xuống - Vortex Downloader")
         self.setMinimumWidth(620)
-        
+        self.setAutoFillBackground(True)
+
+        pal = self.palette()
+        pal.setColor(QPalette.Window, QColor("#f8fafc"))
+        pal.setColor(QPalette.WindowText, QColor("#1e293b"))
+        pal.setColor(QPalette.Base, QColor("#ffffff"))
+        pal.setColor(QPalette.Text, QColor("#1e293b"))
+        self.setPalette(pal)
+
         # Luôn nổi lên trên cùng (đè lên trình duyệt Chrome/Edge)
         self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
         if os.path.exists(ICON_PATH):
             self.setWindowIcon(QIcon(ICON_PATH))
+        self.setStyleSheet(LIGHT_THEME_QSS)
 
         self.download_task_created = None
         self.extracted_formats = []
@@ -151,7 +162,7 @@ class AddDownloadDialog(QDialog):
 
         # Video info banner
         self.lbl_video_info = QLabel("")
-        self.lbl_video_info.setStyleSheet("color: #a6e3a1; font-weight: bold; background-color: #313244; padding: 6px 10px; border-radius: 6px;")
+        self.lbl_video_info.setStyleSheet("color: #065f46; font-weight: bold; background-color: #ecfdf5; border: 1px solid #a7f3d0; padding: 6px 10px; border-radius: 6px;")
         if initial_title:
             self.lbl_video_info.setText(f"🎬 {initial_title}")
             self.lbl_video_info.setVisible(True)
@@ -180,7 +191,7 @@ class AddDownloadDialog(QDialog):
         
         default_dir = initial_folder if (initial_folder and os.path.exists(initial_folder)) else None
         if not default_dir:
-            default_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../downloads"))
+            default_dir = get_default_download_dir()
         os.makedirs(default_dir, exist_ok=True)
         self.dir_input = QLineEdit(default_dir)
         dir_layout.addWidget(self.dir_input)
@@ -198,12 +209,24 @@ class AddDownloadDialog(QDialog):
         self.spin_threads.setValue(16)
         settings_layout.addWidget(self.spin_threads)
 
+        # Tự động nhận diện định dạng gốc từ URL
+        clean_u = initial_url.split("?")[0].split("#")[0].lower()
+        detected_ext = ".mp4"
+        for candidate in [".ts", ".m3u8", ".webm", ".mkv", ".avi", ".mov", ".flv", ".mp3", ".m4a", ".zip", ".rar", ".iso"]:
+            if clean_u.endswith(candidate) or candidate in clean_u:
+                detected_ext = ".ts" if candidate in (".ts", ".m3u8") else candidate
+                break
+        self.detected_source_ext = detected_ext
+
         settings_layout.addSpacing(20)
         settings_layout.addWidget(QLabel("Tên file:"))
         self.filename_input = QLineEdit()
         if initial_title:
             safe = sanitize_filename(initial_title)
-            ext = ".mp3" if (self.initial_format == "audio_only") else ".mp4"
+            base, old_ext = os.path.splitext(safe)
+            if old_ext and len(old_ext) <= 5:
+                safe = base
+            ext = ".mp3" if (self.initial_format == "audio_only") else detected_ext
             self.filename_input.setText(f"{safe}{ext}")
         else:
             self.filename_input.setPlaceholderText("Tự động lấy tiêu đề thực của video...")
@@ -291,9 +314,9 @@ class AddDownloadDialog(QDialog):
         base, ext = os.path.splitext(cur_name)
         if fmt_data == "audio_only":
             self.filename_input.setText(f"{base}.mp3")
-        else:
-            if ext.lower() in [".mp3", ".m4a", ".aac"]:
-                self.filename_input.setText(f"{base}.mp4")
+        elif ext.lower() == ".mp3":
+            orig = getattr(self, "detected_source_ext", ".ts" if ".m3u8" in self.url_input.text().lower() else ".mp4")
+            self.filename_input.setText(f"{base}{orig}")
 
     def _on_url_changed(self, text: str):
         text = text.strip()
@@ -332,12 +355,42 @@ class AddDownloadDialog(QDialog):
         self.extracted_formats = formats
 
         safe_name = sanitize_filename(title)
+        base, _ = os.path.splitext(safe_name)
         is_audio = (self.combo_format.currentData() == "audio_only")
-        ext = ".mp3" if is_audio else ".mp4"
-        self.filename_input.setText(f"{safe_name}{ext}")
+
+        # Giữ nguyên định dạng gốc của nguồn (.ts, .webm, .mkv...), không ép về .mp4
+        source_ext = data.get("ext")
+        clean_u = self.url_input.text().split("?")[0].split("#")[0].lower()
+        if ".m3u8" in clean_u or ".ts" in clean_u:
+            source_ext = "ts"
+        elif not source_ext or source_ext == "mp4":
+            source_ext = getattr(self, "detected_source_ext", ".mp4").lstrip(".")
+        
+        self.detected_source_ext = f".{source_ext}"
+        ext = ".mp3" if is_audio else f".{source_ext}"
+        self.filename_input.setText(f"{base}{ext}")
 
         self.lbl_video_info.setText(f"🎬 {title}")
         self.lbl_video_info.setVisible(True)
+
+        # Xử lý trường hợp file trực tiếp hoặc luồng m3u8/ts đơn lẻ
+        if len(formats) == 1 and formats[0].get("format_id") == "direct_file":
+            self.combo_format.blockSignals(True)
+            self.combo_format.clear()
+            size_str = format_approx_size(formats[0].get("filesize_approx"))
+            self.combo_format.addItem(f"⚡ Tải trực tiếp đa luồng (16 Threads){size_str}", "direct_file")
+            self.combo_format.addItem("🎵 Chỉ tải Âm thanh (Audio MP3)", "audio_only")
+            self.combo_format.blockSignals(False)
+            return
+
+        url_lower = self.url_input.text().lower()
+        if ".m3u8" in url_lower or ".ts" in url_lower:
+            self.combo_format.blockSignals(True)
+            self.combo_format.clear()
+            self.combo_format.addItem("🎬 Luồng phim HLS / .TS (Tự động tải & ghép sang MP4)", "bestvideo+bestaudio/best")
+            self.combo_format.addItem("🎵 Chỉ tải Âm thanh (Audio MP3)", "audio_only")
+            self.combo_format.blockSignals(False)
+            return
 
         # Lọc và nhóm các độ phân giải theo thứ tự từ cao đến thấp
         unique_resolutions = {}
@@ -372,6 +425,12 @@ class AddDownloadDialog(QDialog):
         self.loading_overlay.hide_overlay()
         self.btn_analyze.setEnabled(True)
         self.btn_analyze.setText("🔍 Phân tích Video")
+
+        url = self.url_input.text().strip()
+        url_lower = url.lower()
+        if any(url_lower.endswith(ext) or ext in url_lower for ext in [".mp4", ".mkv", ".webm", ".ts", ".m3u8", ".zip", ".iso"]):
+            self.lbl_video_info.setText("⚡ Nhận diện tệp tin / luồng stream (Sẵn sàng tải)")
+            self.lbl_video_info.setVisible(True)
 
     def _start_download(self):
         url = self.url_input.text().strip()

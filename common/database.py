@@ -1,16 +1,26 @@
 import sqlite3
 import os
+import sys
 import time
 from typing import List, Optional, Dict, Any
 from common.schemas import DownloadTask, TaskStatus, EngineType
 
-DB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data"))
-os.makedirs(DB_DIR, exist_ok=True)
+def get_app_data_dir() -> str:
+    """Trả về thư mục dữ liệu có quyền ghi: %APPDATA%/VortexDownloader/data khi đóng gói, hoặc thư mục data cục bộ."""
+    if getattr(sys, "frozen", False):
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        data_dir = os.path.join(base, "VortexDownloader", "data")
+    else:
+        data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data"))
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
+
+DB_DIR = get_app_data_dir()
 DB_PATH = os.path.join(DB_DIR, "vortex_history.db")
 
 class HistoryDatabase:
-    def __init__(self, db_path: str = DB_PATH):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = db_path or os.path.join(get_app_data_dir(), "vortex_history.db")
         self._init_db()
 
     def _get_connection(self):

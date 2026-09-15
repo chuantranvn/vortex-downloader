@@ -71,3 +71,57 @@ def get_unique_filepath(directory: str, filename: str, reserved_paths: Optional[
             continue
 
         return candidate_path
+
+def get_default_download_dir() -> str:
+    """
+    Trả về thư mục tải mặc định:
+    - Khi chạy đóng gói (.exe): %USERPROFILE%/Downloads/Vortex Downloads
+    - Khi dev: thư mục downloads trong codebase
+    """
+    import sys
+    if getattr(sys, "frozen", False):
+        user_dl = os.path.join(os.path.expanduser("~"), "Downloads", "Vortex Downloads")
+        os.makedirs(user_dl, exist_ok=True)
+        return user_dl
+    else:
+        dev_dl = os.path.abspath(os.path.join(os.path.dirname(__file__), "../downloads"))
+        os.makedirs(dev_dl, exist_ok=True)
+        return dev_dl
+
+def is_autostart_enabled() -> bool:
+    """Kiểm tra xem Vortex Downloader có được cấu hình khởi động cùng Windows không."""
+    import sys
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
+            val, _ = winreg.QueryValueEx(key, "VortexDownloader")
+            return bool(val)
+    except Exception:
+        return False
+
+def set_autostart(enable: bool) -> bool:
+    """Bật hoặc tắt tính năng khởi động cùng Windows trong HKCU Run Registry."""
+    import sys
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
+            if enable:
+                exe_path = sys.executable
+                cmd = f'"{exe_path}" --minimized'
+                winreg.SetValueEx(key, "VortexDownloader", 0, winreg.REG_SZ, cmd)
+            else:
+                try:
+                    winreg.DeleteValue(key, "VortexDownloader")
+                except FileNotFoundError:
+                    pass
+        return True
+    except Exception as e:
+        print(f"[Autostart] Error updating registry: {e}")
+        return False
+

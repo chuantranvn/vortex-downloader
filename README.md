@@ -16,7 +16,13 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 
 <p align="center">
-  <b>Tăng tốc tải dữ liệu tối đa băng thông • Tách video 4K/2K/1080p/MP3 thông minh • Tiện ích nhúng Chrome/Edge • Giao diện Desktop Dark Mode</b>
+  <b>Tăng tốc tải dữ liệu tối đa băng thông • Bóc tách video 8K/4K/1080p/MP3 • Tiện ích nhúng Chrome/Edge • Giao diện Frosted Milky White 2026</b>
+</p>
+
+<p align="center">
+  <a href="USER_GUIDE.md"><b>📖 Hướng Dẫn Sử Dụng Chi Tiết</b></a> • 
+  <a href="ARCHITECTURE.md"><b>🏗️ Kiến Trúc Hệ Thống & Dev Guide</b></a> • 
+  <a href="installer_output/Vortex_Downloader_Setup.exe"><b>📦 Tải Bộ Cài Đặt (.exe)</b></a>
 </p>
 
 ---
@@ -26,12 +32,13 @@
 ## 🌟 Điểm Nhấn Công Nghệ Vượt Trội
 
 * 🚀 **Tải đa luồng chuẩn IDM (Multi-threaded Range Engine):** Tự động chia nhỏ tệp tin thành **8 đến 32 phần song song** thông qua HTTP Range header, tối đa hóa 100% băng thông đường truyền internet.
-* 🎬 **Trích xuất video thông minh (Media Extractor):** Hỗ trợ YouTube, Facebook, TikTok, Instagram và các luồng HLS/m3u8. Tự động bóc tách từ **4K UHD (2160p), 2K QHD (1440p), Full HD (1080p), 720p, 480p** đến **Chỉ tải MP3**.
+* 🎬 **Trích xuất video thông minh (Media Extractor):** Hỗ trợ YouTube, Facebook, TikTok, Instagram và các luồng HLS/m3u8. Tự động bóc tách từ **8K (4320p), 4K (2160p), 2K (1440p), Full HD (1080p), 720p** đến **Chế độ chỉ tải MP3**.
 * 🧩 **Tích hợp FFmpeg 7.1 tĩnh độc lập:** Tự động hòa trộn luồng hình ảnh độ nét cao và âm thanh tốt nhất mà không yêu cầu người dùng phải tự cài đặt FFmpeg trên Windows.
 * 🌐 **Tiện ích trình duyệt thế hệ mới (Manifest V3 Extension):** Nút tải nổi gradient trực tiếp trên trình phát video, menu dropdown chống rớt hover, hiển thị ước tính dung lượng tệp (~MB) và nút tắt `✕` linh hoạt.
-* 🎨 **Giao diện Desktop hiện đại (PySide6 Dark Mode):** Thiết kế phong cách Cyberpunk / Catppuccin, cập nhật tiến trình thời gian thực qua **WebSocket**, hỗ trợ thu nhỏ xuống Khay hệ thống (System Tray).
+* 🎨 **Giao diện Desktop hiện đại 2026 (Frosted Milky White):** Thiết kế thanh lịch với nền trắng đục mờ ảo, thanh điều hướng Sidebar thông minh kèm bộ đếm động, huy hiệu trạng thái tròn (Pills), cập nhật tiến trình thời gian thực qua **WebSocket**, hỗ trợ thu nhỏ xuống Khay hệ thống (System Tray).
 * 📋 **Tự động bắt link Clipboard (Clipboard Monitor):** Nhận diện ngay lập tức khi bạn bấm `Ctrl + C` bất kỳ đường dẫn tải nào khi lướt web.
-* 💾 **Lưu trữ lịch sử bền vững (SQLite DB):** Toàn bộ tác vụ tải, trạng thái, đường dẫn tệp và kích thước tệp thật được lưu trữ vĩnh viễn trong cơ sở dữ liệu SQLite cục bộ.
+* 🚀 **Khởi động cùng Windows (Auto-start):** Tùy chọn chạy ngầm dưới khay hệ thống ngay khi bật máy tính, sẵn sàng bắt link tải tự động mà không làm phiền người dùng.
+* 💾 **Lưu trữ lịch sử bền vững (SQLite DB):** Toàn bộ tác vụ tải, trạng thái, đường dẫn tệp và kích thước tệp thật được lưu trữ vĩnh viễn trong cơ sở dữ liệu SQLite tại `%APPDATA%\VortexDownloader\data\`.
 
 ---
 
@@ -82,7 +89,28 @@ graph TD
 
 ---
 
-## ⚡ Hướng Dẫn Cài Đặt & Khởi Chạy
+## 📦 Cài Đặt Nhanh Bằng Bộ Cài Đặt Windows (Setup Wizard)
+
+Đối với người dùng cuối không muốn cài đặt Python hay cấu hình dòng lệnh, dự án cung cấp sẵn bộ cài đặt hoàn chỉnh:
+
+* **File cài đặt:** `installer_output/Vortex_Downloader_Setup.exe` (hoặc `Vortex_Downloader_Setup_v1.0.exe`)
+* **Tính năng của bộ cài:**
+  * 🪄 **Trình hướng dẫn cài đặt chuẩn (Setup Wizard):** Chọn thư mục cài đặt (`Program Files` hoặc `AppData`).
+  * 🖥️ **Tạo biểu tượng nhanh:** Tự động tạo Shortcut trên màn hình Desktop và Start Menu.
+  * 🚀 **Tự động khởi động cùng Windows (Run on Startup):** Tích hợp tùy chọn khởi động ngầm êm ái ở khay hệ thống (System Tray) khi bật máy tính. Có thể bật/tắt dễ dàng qua checkbox trên thanh công cụ hoặc menu chuột phải khay hệ thống.
+  * 🧩 **Tích hợp sẵn mọi thứ:** Đã nhúng sẵn Python runtime, FFmpeg 7.1 tĩnh và Extension Chromium, người dùng chỉ cần chạy file `.exe` là có thể tải ngay.
+  * 🗑️ **Trình gỡ cài đặt sạch sẽ:** Hỗ trợ Uninstall chuẩn từ Windows Apps & Settings / Control Panel.
+
+### 🛠️ Lệnh Đóng Gói Bộ Cài Đặt (Dành Cho Lập Trình Viên)
+Để tự đóng gói lại toàn bộ ứng dụng từ mã nguồn:
+```powershell
+python build_installer.py
+```
+Script sẽ tự động tạo icon `.ico`, chạy PyInstaller thu thập binary và biên dịch Inno Setup xuất ra `installer_output/Vortex_Downloader_Setup.exe`.
+
+---
+
+## ⚡ Hướng Dẫn Cài Đặt Cho Lập Trình Viên (Dev Mode)
 
 ### 1. Yêu cầu hệ thống
 * **Hệ điều hành:** Windows 10/11 (hoặc Linux / macOS).
@@ -102,12 +130,11 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 3. Khởi chạy 1-Click (Khuyến nghị)
-Chỉ cần chạy lệnh duy nhất sau, ứng dụng sẽ tự động kích hoạt cả 3 Microservices và mở ngay giao diện Desktop:
+### 3. Khởi chạy phát triển (Dev Run)
+Chỉ cần chạy lệnh sau để chạy trực tiếp từ mã nguồn:
 ```powershell
 python run_app.py
 ```
-> Khi tắt cửa sổ giao diện, script sẽ tự động dọn dẹp và đóng an toàn tất cả các tiến trình dịch vụ phía sau.
 
 ---
 

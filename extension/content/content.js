@@ -136,13 +136,196 @@
         });
     }
 
-    async function triggerDownload(formatId = null) {
-        const videoUrl = getCleanUrl();
-        showToast("⚡ Đang mở hộp thoại tải xuống Vortex...", true);
+    function isPlatformSite() {
+        const host = window.location.hostname.toLowerCase();
+        return host.includes("youtube.com") || host.includes("youtu.be") ||
+               host.includes("tiktok.com") ||
+               host.includes("facebook.com") || host.includes("fb.watch") ||
+               host.includes("instagram.com") ||
+               host.includes("twitter.com") || host.includes("x.com") ||
+               host.includes("twitch.tv") ||
+               host.includes("vimeo.com") ||
+               host.includes("soundcloud.com");
+    }
 
+    function getMediaTitle() {
+        try {
+            // YouTube title
+            const ytTitle = document.querySelector("h1.ytd-watch-metadata yt-formatted-string, #title h1, h1.title");
+            if (ytTitle && ytTitle.textContent.trim()) return ytTitle.textContent.trim();
+
+            // Tin tức báo chí & web xem phim
+            const pageH1 = document.querySelector("h1.title-detail, h1.title-news, h1.article-title, h1.entry-title, h1.film-title, h1");
+            if (pageH1 && pageH1.textContent.trim()) {
+                return pageH1.textContent.trim();
+            }
+
+            if (document.title) {
+                return document.title
+                    .replace(/ - YouTube$/i, "")
+                    .replace(/ - VnExpress$/i, "")
+                    .replace(/ \| Báo Dân trí$/i, "")
+                    .replace(/ - Tuổi Trẻ Online$/i, "")
+                    .trim();
+            }
+        } catch (e) {}
+        return "Video_" + Math.floor(Date.now() / 1000);
+    }
+
+    async function resolveMediaSource(videoEl) {
+        // Tầng 1: Thuộc tính trực tiếp của thẻ <video>
+        if (videoEl) {
+            if (videoEl.currentSrc && !videoEl.currentSrc.startsWith("blob:") && /^https?:\/\//i.test(videoEl.currentSrc)) {
+                return { url: videoEl.currentSrc, type: videoEl.currentSrc.includes(".m3u8") ? "m3u8" : "direct" };
+            }
+            if (videoEl.src && !videoEl.src.startsWith("blob:") && /^https?:\/\//i.test(videoEl.src)) {
+                return { url: videoEl.src, type: videoEl.src.includes(".m3u8") ? "m3u8" : "direct" };
+            }
+            const sources = videoEl.querySelectorAll("source");
+            for (const s of sources) {
+                const src = s.src || s.getAttribute("src");
+                if (src && !src.startsWith("blob:") && /^https?:\/\//i.test(src)) {
+                    return { url: src, type: src.includes(".m3u8") ? "m3u8" : "direct" };
+                }
+            }
+
+            // Tầng 2: Data attributes trên thẻ video hoặc container bao bọc
+            const containers = [videoEl, videoEl.parentElement, videoEl.closest(".player, .video-player, .jwplayer, .vjs-tech")].filter(Boolean);
+            for (const c of containers) {
+                for (const attr of ["data-src", "data-video-src", "data-url", "data-hls-src", "data-hls", "data-mp4", "data-file"]) {
+                    const val = c.getAttribute(attr);
+                    if (val && !val.startsWith("blob:") && /^https?:\/\//i.test(val)) {
+                        return { url: val, type: val.includes(".m3u8") ? "m3u8" : "direct" };
+                    }
+                }
+            }
+        }
+
+        // Tầng 3: Performance Resource Timing (bắt .m3u8, .ts, .mp4 trong các request vừa nạp)
+        try {
+            const entries = window.performance.getEntriesByType("resource");
+            let m3u8Url = null;
+            let tsUrl = null;
+            let mp4Url = null;
+
+            for (let i = entries.length - 1; i >= 0; i--) {
+                const name = entries[i].name;
+                if (!name || name.startsWith("blob:") || name.startsWith("data:")) continue;
+                if (/\.m3u8(?:\?.*)?$/i.test(name) || name.includes(".m3u8")) {
+                    m3u8Url = name;
+                    break;
+                } else if (/\.mp4(?:\?.*)?$/i.test(name)) {
+                    if (!mp4Url) mp4Url = name;
+                } else if (/\.ts(?:\?.*)?$/i.test(name)) {
+                    if (!tsUrl) tsUrl = name;
+                }
+            }
+
+            if (m3u8Url) return { url: m3u8Url, type: "m3u8" };
+            if (mp4Url) return { url: mp4Url, type: "direct" };
+            if (tsUrl) return { url: tsUrl, type: "ts" };
+        } catch (e) {}
+
+        // Tầng 4: Background Sniffer (webRequest trên tab này)
+        try {
+            const bgResp = await new Promise((res) => {
+                chrome.runtime.sendMessage({ type: "GET_TAB_MEDIA" }, (resp) => {
+                    res(resp && resp.media ? resp.media : []);
+                });
+            });
+
+            if (bgResp && bgResp.length > 0) {
+                const m3u8 = bgResp.find(m => m.isPlaylist || m.url.includes(".m3u8"));
+                if (m3u8) return { url: m3u8.url, type: "m3u8" };
+
+                const mp4 = bgResp.find(m => m.isDirectMp4 || m.url.includes(".mp4"));
+                if (mp4) return { url: mp4.url, type: "direct" };
+
+                const ts = bgResp.find(m => m.isTsSegment || m.url.includes(".ts"));
+                if (ts) return { url: ts.url, type: "ts" };
+
+                return { url: bgResp[0].url, type: "media" };
+            }
+        } catch (e) {}
+
+        return null;
+    }
+
+    async function directFetch(endpoint, method = "GET", body = null) {
+        const urls = [
+            `http://127.0.0.1:8000${endpoint}`,
+            `http://localhost:8000${endpoint}`
+        ];
+        let lastErr = null;
+        for (const u of urls) {
+            try {
+                const opts = {
+                    method: method,
+                    headers: { "Content-Type": "application/json" }
+                };
+                if (body) opts.body = JSON.stringify(body);
+                const res = await fetch(u, opts);
+                if (res.ok) {
+                    try { return await res.json(); } catch (e) { return {}; }
+                }
+            } catch (err) {
+                lastErr = err;
+            }
+        }
+        throw lastErr || new Error("Failed to connect to Gateway");
+    }
+
+    function callGateway(endpoint, method = "GET", body = null) {
+        return new Promise((resolve, reject) => {
+            try {
+                chrome.runtime.sendMessage({
+                    type: "GATEWAY_REQUEST",
+                    endpoint: endpoint,
+                    method: method,
+                    body: body
+                }, (response) => {
+                    if (chrome.runtime.lastError || !response) {
+                        directFetch(endpoint, method, body).then(resolve).catch(reject);
+                        return;
+                    }
+                    if (response.ok) {
+                        resolve(response.data || {});
+                    } else {
+                        reject(new Error(response.error || "Gateway error"));
+                    }
+                });
+            } catch (e) {
+                directFetch(endpoint, method, body).then(resolve).catch(reject);
+            }
+        });
+    }
+
+    async function triggerDownload(formatId = null, targetUrl = null, videoEl = null) {
+        let finalUrl = targetUrl;
+        let finalFormat = formatId;
+
+        if (!finalUrl) {
+            if (isPlatformSite()) {
+                finalUrl = getCleanUrl();
+            } else {
+                showToast("🔍 Đang dò tìm nguồn video / luồng phim...", true);
+                const resolved = await resolveMediaSource(videoEl);
+                if (resolved && resolved.url) {
+                    finalUrl = resolved.url;
+                    if (resolved.type === "direct" || resolved.type === "ts") {
+                        finalFormat = null;
+                    } else if (resolved.type === "m3u8") {
+                        finalFormat = "bestvideo+bestaudio/best";
+                    }
+                } else {
+                    finalUrl = window.location.href;
+                }
+            }
+        }
+
+        showToast("⚡ Đang mở hộp thoại tải xuống Vortex...", true);
         const cookies = await requestCookies();
 
-        // Lấy folder lưu trữ từ storage
         let saveFolder = null;
         try {
             const stored = await chrome.storage.local.get("vortex_save_folder");
@@ -151,21 +334,12 @@
             }
         } catch (e) {}
 
-        // Lấy tiêu đề video từ trang YouTube hiện tại
-        let videoTitle = "";
-        try {
-            const titleEl = document.querySelector("h1.ytd-watch-metadata yt-formatted-string, #title h1, h1.title");
-            if (titleEl && titleEl.textContent.trim()) {
-                videoTitle = titleEl.textContent.trim();
-            } else if (document.title) {
-                videoTitle = document.title.replace(/ - YouTube$/, "").trim();
-            }
-        } catch (e) {}
+        const videoTitle = getMediaTitle();
 
         try {
             const payload = {
-                url: videoUrl,
-                format_id: formatId,
+                url: finalUrl,
+                format_id: finalFormat,
                 cookies: cookies,
                 title: videoTitle
             };
@@ -173,17 +347,8 @@
                 payload.save_path = saveFolder;
             }
 
-            const res = await fetch(`${GATEWAY_URL}/api/v1/system/open_add_dialog`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-
-            if (res.ok) {
-                showToast("✨ Đã mở hộp thoại tải xuống Vortex trên máy tính!", true);
-            } else {
-                showToast("Lỗi: Không thể gửi yêu cầu mở hộp thoại đến Gateway!", false);
-            }
+            await callGateway("/api/v1/system/open_add_dialog", "POST", payload);
+            showToast("✨ Đã mở hộp thoại tải xuống Vortex trên máy tính!", true);
         } catch (err) {
             showToast("Vortex Downloader chưa bật! Hãy chạy run_app.py", false);
         }
@@ -203,23 +368,12 @@
 
         try {
             if (statusElement) statusElement.textContent = "⏳ Đang dò tất cả chất lượng...";
-            const res = await fetch(`${GATEWAY_URL}/api/v1/extract`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ url: videoUrl, cookies: cookies })
-            });
-
-            if (!res.ok) {
-                if (statusElement) statusElement.textContent = "⚡ Sẵn sàng tải với các mức chuẩn";
-                return;
-            }
-
-            const data = await res.json();
+            const data = await callGateway("/api/v1/extract", "POST", { url: videoUrl, cookies: cookies });
             if (data && Array.isArray(data.formats) && data.formats.length > 0) {
                 qualityCache.set(clean, data);
                 renderQualities(data, menuElement, statusElement);
             } else {
-                if (statusElement) statusElement.textContent = "⚡ Sẵn sàng tải các mức chuẩn";
+                if (statusElement) statusElement.textContent = "⚡ Sẵn sàng tải với các mức chuẩn";
             }
         } catch (e) {
             if (statusElement) statusElement.textContent = "⚡ Sẵn sàng tải các mức chuẩn";
@@ -263,19 +417,16 @@
             showToast("Đang mở hộp thoại chọn thư mục trên máy tính...", true);
 
             try {
-                const res = await fetch(`${GATEWAY_URL}/api/v1/system/browse_folder`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.status === "ok" && data.folder) {
-                        await chrome.storage.local.set({ vortex_save_folder: data.folder });
-                        showToast(`📁 Đã đổi thư mục lưu: ${data.folder}`, true);
-                        const folderText = folderRow.querySelector(".vortex-folder-text");
-                        if (folderText) {
-                            folderText.textContent = data.folder.length > 25 ? "..." + data.folder.slice(-22) : data.folder;
-                            folderRow.title = `Thư mục lưu hiện tại: ${data.folder}`;
-                        }
+                const data = await callGateway("/api/v1/system/browse_folder", "GET");
+                if (data && data.status === "ok" && data.folder) {
+                    await chrome.storage.local.set({ vortex_save_folder: data.folder });
+                    showToast(`📁 Đã đổi thư mục lưu: ${data.folder}`, true);
+                    const folderText = folderRow.querySelector(".vortex-folder-text");
+                    if (folderText) {
+                        folderText.textContent = data.folder.length > 25 ? "..." + data.folder.slice(-22) : data.folder;
+                        folderRow.title = `Thư mục lưu hiện tại: ${data.folder}`;
                     }
-                } else {
+                } else if (data && data.status !== "cancelled") {
                     showToast("Không thể mở hộp thoại chọn thư mục!", false);
                 }
             } catch (err) {
@@ -397,26 +548,17 @@
         }
     }
 
-    function createFloatingBar() {
+    function createFloatingBar(videoElement = null) {
+        const isPlatform = isPlatformSite();
         const container = document.createElement("div");
         container.className = "vortex-floating-container";
         if (isCurrentUrlMinimized()) {
             container.classList.add("minimized");
         }
-        container.innerHTML = `
-            <div class="vortex-btn-group">
-                <div class="vortex-download-btn" title="Bấm để chọn chất lượng tải">
-                    <img src="${ICON_DATA_URI}" class="vortex-btn-icon" alt="Vortex" />
-                    <span>Tải video này</span>
-                    <span class="vortex-btn-arrow">▼</span>
-                </div>
-                <div class="vortex-close-btn" title="Thu nhỏ thanh tải">✕</div>
-            </div>
-            <div class="vortex-mini-badge" title="Vortex Downloader - Bấm để mở lại (chuột phải để ẩn hẳn)">
-                <img src="${ICON_DATA_URI}" class="vortex-mini-icon" alt="Vortex" />
-                <span class="vortex-mini-dot"></span>
-            </div>
-            <div class="vortex-dropdown-menu">
+
+        let menuItemsHtml = "";
+        if (isPlatform) {
+            menuItemsHtml = `
                 <div class="vortex-menu-item" data-format="bestvideo+bestaudio/best">
                     <div class="vortex-item-left">
                         <span>🌟</span>
@@ -473,6 +615,47 @@
                     </div>
                 </div>
                 <div class="vortex-menu-status">⏳ Đang lấy danh sách chất lượng...</div>
+            `;
+        } else {
+            menuItemsHtml = `
+                <div class="vortex-menu-item" data-action="auto">
+                    <div class="vortex-item-left">
+                        <span>🌟</span>
+                        <span>Tải video này (Chất lượng gốc)</span>
+                    </div>
+                </div>
+                <div class="vortex-menu-item" data-action="hls">
+                    <div class="vortex-item-left">
+                        <span>🎬</span>
+                        <span>Tải luồng phim HLS / .TS (Ghép MP4 tự động)</span>
+                    </div>
+                </div>
+                <div class="vortex-menu-divider"></div>
+                <div class="vortex-menu-item" data-format="audio_only">
+                    <div class="vortex-item-left">
+                        <span>🎵</span>
+                        <span>Chỉ tải MP3 (Âm thanh)</span>
+                    </div>
+                </div>
+                <div class="vortex-menu-status">⚡ Đang kết nối luồng video / .ts...</div>
+            `;
+        }
+
+        container.innerHTML = `
+            <div class="vortex-btn-group">
+                <div class="vortex-download-btn" title="Bấm để tải video này về máy tính">
+                    <img src="${ICON_DATA_URI}" class="vortex-btn-icon" alt="Vortex" />
+                    <span>Tải video này</span>
+                    <span class="vortex-btn-arrow">▼</span>
+                </div>
+                <div class="vortex-close-btn" title="Thu nhỏ thanh tải">✕</div>
+            </div>
+            <div class="vortex-mini-badge" title="Vortex Downloader - Bấm để mở lại (chuột phải để ẩn hẳn)">
+                <img src="${ICON_DATA_URI}" class="vortex-mini-icon" alt="Vortex" />
+                <span class="vortex-mini-dot"></span>
+            </div>
+            <div class="vortex-dropdown-menu">
+                ${menuItemsHtml}
             </div>
         `;
 
@@ -481,17 +664,31 @@
         container.addEventListener("mousedown", (e) => e.stopPropagation());
 
         const mainBtn = container.querySelector(".vortex-download-btn");
+        const arrowBtn = container.querySelector(".vortex-btn-arrow");
         const closeBtn = container.querySelector(".vortex-close-btn");
         const miniBadge = container.querySelector(".vortex-mini-badge");
         const dropdownMenu = container.querySelector(".vortex-dropdown-menu");
         const statusEl = container.querySelector(".vortex-menu-status");
         setupFolderRow(dropdownMenu);
 
-        // Bấm vào nút tải -> Bật/Tắt menu chọn chất lượng
+        // Bấm vào nút tải:
+        // - Với web phim/tin tức: bấm trực tiếp để kích hoạt tải ngay lập tức
+        // - Với YouTube: mở menu chọn độ phân giải
         mainBtn.addEventListener("click", (e) => {
             e.stopPropagation();
-            container.classList.toggle("open");
+            if (!isPlatform) {
+                triggerDownload(null, null, videoElement);
+            } else {
+                container.classList.toggle("open");
+            }
         });
+
+        if (arrowBtn) {
+            arrowBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                container.classList.toggle("open");
+            });
+        }
 
         // Bấm nút X -> Thu nhỏ thanh tải thành icon mini ở góc
         closeBtn.addEventListener("click", (e) => {
@@ -548,12 +745,40 @@
                 e.stopPropagation();
                 container.classList.remove("open");
                 const fmt = item.getAttribute("data-format");
-                triggerDownload(fmt);
+                triggerDownload(fmt, null, videoElement);
             });
         });
 
-        // Tự động trích xuất các chất lượng cụ thể theo thời gian thực
-        fetchVideoQualities(window.location.href, dropdownMenu, statusEl);
+        if (isPlatform) {
+            // Tự động trích xuất các chất lượng cụ thể theo thời gian thực cho YouTube
+            fetchVideoQualities(window.location.href, dropdownMenu, statusEl);
+        } else {
+            // Cập nhật trạng thái nhận diện media thời gian thực cho web xem phim & tin tức
+            async function updateMediaStatus() {
+                const res = await resolveMediaSource(videoElement);
+                if (res && res.url) {
+                    if (res.type === "m3u8") {
+                        if (statusEl) statusEl.textContent = "✅ Đã bắt luồng phim gốc (.m3u8 / .ts)";
+                    } else if (res.type === "ts") {
+                        if (statusEl) statusEl.textContent = "✅ Đã bắt file video gốc (.ts)";
+                    } else {
+                        const cleanExt = (res.url.split("?")[0].split(".").pop() || "mp4").toLowerCase();
+                        if (statusEl) statusEl.textContent = `✅ Đã bắt video gốc (.${cleanExt})`;
+                    }
+                } else {
+                    if (statusEl) statusEl.textContent = "⚡ Nhấn Play video để bắt luồng tốt nhất";
+                }
+            }
+
+            if (videoElement) {
+                videoElement.addEventListener("play", updateMediaStatus);
+                videoElement.addEventListener("loadedmetadata", updateMediaStatus);
+                videoElement.addEventListener("timeupdate", () => {
+                    if (statusEl && !statusEl.textContent.includes("✅")) updateMediaStatus();
+                }, { once: true });
+            }
+            setTimeout(updateMediaStatus, 1200);
+        }
 
         return container;
     }
@@ -581,23 +806,23 @@
         if (ytPlayer) {
             if (!ytPlayer.querySelector(".vortex-floating-container")) {
                 ytPlayer.style.position = "relative";
-                ytPlayer.appendChild(createFloatingBar());
+                ytPlayer.appendChild(createFloatingBar(null));
             }
             return;
         }
 
-        // Các trang web chứa thẻ <video> khác
+        // Các trang web chứa thẻ <video> khác (Báo chí, Web xem phim)
         const videos = document.querySelectorAll("video");
         for (const vid of videos) {
             const parent = vid.parentElement;
             if (parent && !parent.querySelector(".vortex-floating-container")) {
                 const rect = vid.getBoundingClientRect();
-                if (rect.width > 220 && rect.height > 160) {
+                if (rect.width > 200 && rect.height > 140) {
                     const style = window.getComputedStyle(parent);
                     if (style.position === "static") {
                         parent.style.position = "relative";
                     }
-                    parent.appendChild(createFloatingBar());
+                    parent.appendChild(createFloatingBar(vid));
                     break;
                 }
             }

@@ -3,15 +3,16 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import asyncio
+import time
 import re
 from typing import List, Dict, Any, Optional
 import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from common.schemas import DownloadRequest, DownloadTask, TaskStatus, EngineType, MediaMetadata, CookieSyncRequest
+from common.schemas import DownloadRequest, DownloadTask, TaskStatus, EngineType, MediaMetadata, MediaFormat, CookieSyncRequest
 from common.database import HistoryDatabase
-from common.utils import clean_video_url
+from common.utils import clean_video_url, get_default_download_dir
 
 app = FastAPI(
     title="Vortex Downloader - API Gateway",
@@ -26,6 +27,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def add_cors_and_pna_headers(request, call_next):
+    if request.method == "OPTIONS":
+        from starlette.responses import Response
+        res = Response()
+        res.headers["Access-Control-Allow-Origin"] = "*"
+        res.headers["Access-Control-Allow-Methods"] = "*"
+        res.headers["Access-Control-Allow-Headers"] = "*"
+        res.headers["Access-Control-Allow-Private-Network"] = "true"
+        return res
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Private-Network"] = "true"
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
+
+@app.options("/{full_path:path}")
+async def options_preflight(full_path: str):
+    from fastapi.responses import Response
+    res = Response(status_code=204)
+    res.headers["Access-Control-Allow-Origin"] = "*"
+    res.headers["Access-Control-Allow-Methods"] = "*"
+    res.headers["Access-Control-Allow-Headers"] = "*"
+    res.headers["Access-Control-Allow-Private-Network"] = "true"
+    return res
 
 CORE_ENGINE_URL = os.getenv("CORE_ENGINE_URL", "http://127.0.0.1:8001")
 MEDIA_EXTRACTOR_URL = os.getenv("MEDIA_EXTRACTOR_URL", "http://127.0.0.1:8002")
@@ -57,7 +83,21 @@ class WebSocketHub:
 hub = WebSocketHub()
 task_engine_map: Dict[str, str] = {}
 
+def is_direct_file_url(url: str) -> bool:
+    clean = url.split("?")[0].split("#")[0].lower()
+    direct_exts = (
+        ".ts", ".mp4", ".mkv", ".webm", ".avi", ".mov", ".flv",
+        ".mp3", ".m4a", ".aac", ".flac", ".wav",
+        ".zip", ".rar", ".7z", ".tar", ".gz", ".iso", ".exe", ".bin"
+    )
+    return any(clean.endswith(ext) for ext in direct_exts)
+
 def is_streaming_media_url(url: str) -> bool:
+    # 1. HLS Playlist hoặc DASH manifest
+    if re.search(r"\.(?:m3u8|mpd)(?:\?.*)?$", url, re.IGNORECASE) or ".m3u8" in url.lower():
+        return True
+
+    # 2. Các nền tảng streaming chuyên biệt
     media_patterns = [
         r"(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)",
         r"(?:https?:\/\/)?(?:www\.)?tiktok\.com",
@@ -67,8 +107,6 @@ def is_streaming_media_url(url: str) -> bool:
         r"(?:https?:\/\/)?(?:www\.)?vimeo\.com",
         r"(?:https?:\/\/)?(?:www\.)?twitch\.tv",
         r"(?:https?:\/\/)?(?:www\.)?soundcloud\.com",
-        r"\.m3u8(?:\?.*)?$",
-        r"\.mpd(?:\?.*)?$"
     ]
     for pattern in media_patterns:
         if re.search(pattern, url, re.IGNORECASE):
@@ -80,6 +118,7 @@ async def start_background_broadcaster():
     asyncio.create_task(_periodic_broadcast_loop())
 
 async def _periodic_broadcast_loop():
+    last_db_sync = time.time()
     async with httpx.AsyncClient(timeout=3.0) as client:
         while True:
             await asyncio.sleep(0.5)
@@ -92,12 +131,6 @@ async def _periodic_broadcast_loop():
                     for t in res.json():
                         task_engine_map[t["id"]] = CORE_ENGINE_URL
                         active_tasks.append(t)
-                        # Lưu/Cập nhật vào SQLite
-                        try:
-                            task_obj = DownloadTask(**t)
-                            db.upsert_task(task_obj)
-                        except Exception:
-                            pass
             except Exception:
                 pass
 
@@ -108,14 +141,24 @@ async def _periodic_broadcast_loop():
                     for t in res.json():
                         task_engine_map[t["id"]] = MEDIA_EXTRACTOR_URL
                         active_tasks.append(t)
-                        # Lưu/Cập nhật vào SQLite
-                        try:
-                            task_obj = DownloadTask(**t)
-                            db.upsert_task(task_obj)
-                        except Exception:
-                            pass
             except Exception:
                 pass
+
+            # Tối ưu lưu trữ DB: Chỉ ghi đĩa khi đổi trạng thái hoặc định kỳ mỗi 4s để loại bỏ lag I/O
+            now = time.time()
+            sync_db = (now - last_db_sync >= 4.0)
+            if sync_db:
+                last_db_sync = now
+
+            for t in active_tasks:
+                status_str = str(t.get("status", "")).lower()
+                is_terminal = status_str in ("completed", "failed", "paused")
+                if sync_db or is_terminal:
+                    try:
+                        task_obj = DownloadTask(**t)
+                        db.upsert_task(task_obj)
+                    except Exception:
+                        pass
 
             if hub.active_connections and active_tasks:
                 await hub.broadcast({"type": "progress_update", "tasks": active_tasks})
@@ -147,6 +190,38 @@ async def health_check():
 @app.post("/api/v1/extract", response_model=MediaMetadata)
 async def extract_media(req: DownloadRequest):
     req.url = clean_video_url(req.url)
+
+    # Nếu là link file trực tiếp (.mp4, .zip,...), tự động gọi probe thay vì ép qua yt-dlp
+    if is_direct_file_url(req.url):
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                res = await client.post(f"{CORE_ENGINE_URL}/api/v1/probe", json=req.dict())
+                if res.status_code == 200:
+                    probe_data = res.json()
+                    filename = probe_data.get("filename") or os.path.basename(req.url.split("?")[0]) or "video.mp4"
+                    size = probe_data.get("content_length", 0)
+                    ext = os.path.splitext(filename)[1].lstrip(".") or "mp4"
+                    return MediaMetadata(
+                        url=req.url,
+                        title=filename,
+                        thumbnail=None,
+                        duration=None,
+                        formats=[
+                            MediaFormat(
+                                format_id="direct_file",
+                                ext=ext,
+                                resolution="Direct File",
+                                filesize_approx=size,
+                                fps=None,
+                                vcodec=None,
+                                acodec=None,
+                                format_note="Tải trực tiếp đa luồng siêu tốc (16 threads)"
+                            )
+                        ]
+                    )
+            except Exception:
+                pass
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             res = await client.post(f"{MEDIA_EXTRACTOR_URL}/api/v1/extract", json=req.dict())
@@ -199,7 +274,7 @@ class SettingsUpdate(BaseModel):
 
 @app.get("/api/v1/system/settings")
 async def get_system_settings():
-    saved_dir = db.get_setting("default_download_dir", os.path.abspath("downloads"))
+    saved_dir = db.get_setting("default_download_dir", get_default_download_dir())
     return {"default_download_dir": saved_dir}
 
 @app.post("/api/v1/system/settings")
@@ -263,8 +338,15 @@ async def create_download(req: DownloadRequest):
     if not req.save_path:
         req.save_path = db.get_setting("default_download_dir", os.path.abspath("downloads"))
 
-    is_media = is_streaming_media_url(req.url) or (req.format_id is not None)
-    target_engine = MEDIA_EXTRACTOR_URL if is_media else CORE_ENGINE_URL
+    # Định tuyến thông minh:
+    # 1. File trực tiếp (.mp4, .zip, .mkv) -> Chuyển Core Engine (16 luồng phân mảnh)
+    # 2. Luồng HLS (.m3u8), .ts segment hoặc nền tảng (YouTube, TikTok) -> Chuyển Media Extractor (FFmpeg merge)
+    if is_direct_file_url(req.url):
+        target_engine = CORE_ENGINE_URL
+    elif is_streaming_media_url(req.url) or (req.format_id is not None):
+        target_engine = MEDIA_EXTRACTOR_URL
+    else:
+        target_engine = CORE_ENGINE_URL
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         try:

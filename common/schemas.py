@@ -78,3 +78,4 @@ class MediaMetadata(BaseModel):
     thumbnail: Optional[str] = None
     duration: Optional[float] = None
     formats: List[MediaFormat] = []
+    ext: Optional[str] = None

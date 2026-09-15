@@ -81,6 +81,87 @@ async function syncCookiesToGateway() {
     }
 }
 
+// Quản lý các luồng media được bắt theo tabId
+const tabMediaMap = new Map();
+
+function addTabMedia(tabId, mediaInfo) {
+    if (!tabId || tabId < 0) return;
+    if (!tabMediaMap.has(tabId)) {
+        tabMediaMap.set(tabId, []);
+    }
+    const list = tabMediaMap.get(tabId);
+    // Kiểm tra trùng URL
+    if (!list.some(item => item.url === mediaInfo.url)) {
+        // Ưu tiên file danh sách phát m3u8 lên đầu danh sách
+        if (mediaInfo.isPlaylist || mediaInfo.url.includes(".m3u8")) {
+            list.unshift(mediaInfo);
+        } else {
+            list.push(mediaInfo);
+        }
+        // Giới hạn tối đa 50 item mỗi tab
+        if (list.length > 50) list.pop();
+    }
+}
+
+// Xóa danh sách khi tab chuyển trang hoặc bị đóng
+if (chrome.tabs) {
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+        if (changeInfo.status === "loading" && changeInfo.url) {
+            tabMediaMap.delete(tabId);
+        }
+    });
+
+    chrome.tabs.onRemoved.addListener((tabId) => {
+        tabMediaMap.delete(tabId);
+    });
+}
+
+// Bắt các request media bằng chrome.webRequest
+if (chrome.webRequest && chrome.webRequest.onHeadersReceived) {
+    const MEDIA_EXTS = /\.(?:m3u8|mp4|ts|mpd|webm|m4v|flv)(?:\?.*)?$/i;
+
+    chrome.webRequest.onHeadersReceived.addListener(
+        (details) => {
+            const url = details.url;
+            if (!url || url.startsWith("blob:") || url.startsWith("data:")) return;
+
+            let contentType = "";
+            let contentLength = 0;
+            if (details.responseHeaders) {
+                for (const h of details.responseHeaders) {
+                    const name = h.name.toLowerCase();
+                    if (name === "content-type") contentType = (h.value || "").toLowerCase();
+                    if (name === "content-length") contentLength = parseInt(h.value, 10) || 0;
+                }
+            }
+
+            const isMediaExtension = MEDIA_EXTS.test(url);
+            const isMediaMime = contentType.includes("video/") ||
+                                contentType.includes("mpegurl") ||
+                                contentType.includes("video/mp2t") ||
+                                contentType.includes("application/dash+xml");
+
+            if (isMediaExtension || isMediaMime) {
+                const isM3u8 = url.includes(".m3u8") || contentType.includes("mpegurl");
+                const isTs = url.includes(".ts") || contentType.includes("video/mp2t");
+                const isMp4 = url.includes(".mp4") || contentType.includes("video/mp4");
+
+                addTabMedia(details.tabId, {
+                    url: url,
+                    contentType: contentType,
+                    contentLength: contentLength,
+                    isPlaylist: isM3u8,
+                    isTsSegment: isTs,
+                    isDirectMp4: isMp4,
+                    timestamp: Date.now()
+                });
+            }
+        },
+        { urls: ["<all_urls>"] },
+        ["responseHeaders"]
+    );
+}
+
 // Lắng nghe lệnh từ Content Script hoặc Popup nếu cần
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === "CHECK_GATEWAY") {
@@ -98,4 +179,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         return true;
     }
+
+    if (request.type === "GET_TAB_MEDIA") {
+        const tabId = sender.tab ? sender.tab.id : request.tabId;
+        const media = tabMediaMap.get(tabId) || [];
+        sendResponse({ media: media });
+        return true;
+    }
+
+    if (request.type === "GATEWAY_REQUEST") {
+        const url = `http://127.0.0.1:8000${request.endpoint}`;
+        const opts = {
+            method: request.method || "GET",
+            headers: { "Content-Type": "application/json" }
+        };
+        if (request.body) {
+            opts.body = JSON.stringify(request.body);
+        }
+        fetch(url, opts)
+            .then(async (res) => {
+                let data = null;
+                try { data = await res.json(); } catch (e) {}
+                sendResponse({ ok: res.ok, status: res.status, data: data });
+            })
+            .catch((err) => {
+                sendResponse({ ok: false, error: err.message });
+            });
+        return true;
+    }
 });
+
+

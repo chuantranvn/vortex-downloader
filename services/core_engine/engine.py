@@ -6,11 +6,11 @@ import urllib.parse
 from typing import Dict, Optional, List
 import aiohttp
 from common.schemas import DownloadTask, TaskStatus, EngineType, ChunkProgress
-from common.utils import get_unique_filepath, sanitize_filename
+from common.utils import get_unique_filepath, sanitize_filename, get_default_download_dir
 
 class HttpRangeDownloadEngine:
-    def __init__(self, default_download_dir: str = "downloads"):
-        self.download_dir = os.path.abspath(default_download_dir)
+    def __init__(self, default_download_dir: Optional[str] = None):
+        self.download_dir = os.path.abspath(default_download_dir or get_default_download_dir())
         os.makedirs(self.download_dir, exist_ok=True)
         self.tasks: Dict[str, DownloadTask] = {}
         self._pause_events: Dict[str, asyncio.Event] = {}

@@ -39,7 +39,7 @@ class LoadingSpinner(QWidget):
             rad = math.radians(angle)
             
             alpha = int(255 * (i + 1) / num_lines)
-            pen = QPen(QColor(137, 180, 250, alpha))  # Màu #89b4fa Catppuccin Blue
+            pen = QPen(QColor(37, 99, 235, alpha))  # Màu #2563eb Royal Blue
             pen.setWidthF(3.2)
             pen.setCapStyle(Qt.RoundCap)
             painter.setPen(pen)
@@ -67,8 +67,8 @@ class LoadingOverlay(QWidget):
         self.card = QWidget(self)
         self.card.setStyleSheet("""
             QWidget {
-                background-color: rgba(24, 24, 37, 0.94);
-                border: 1.5px solid #89b4fa;
+                background-color: rgba(255, 255, 255, 0.96);
+                border: 1.5px solid #93c5fd;
                 border-radius: 14px;
             }
         """)
@@ -86,7 +86,7 @@ class LoadingOverlay(QWidget):
             QLabel {
                 font-size: 13px;
                 font-weight: bold;
-                color: #cdd6f4;
+                color: #1e293b;
                 border: none;
                 background: transparent;
             }
@@ -111,8 +111,8 @@ class LoadingOverlay(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        # Làm mờ tối nền nhẹ nhàng để tập trung vào hộp loading
-        painter.fillRect(self.rect(), QColor(17, 17, 27, 170))
+        # Làm mờ nền nhẹ nhàng để tập trung vào hộp loading
+        painter.fillRect(self.rect(), QColor(15, 23, 42, 65))
         super().paintEvent(event)
 
 class AsyncActionWorker(QThread):

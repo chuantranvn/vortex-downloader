@@ -29,6 +29,7 @@ MANIFEST
 # PyInstaller
 *.manifest
 *.spec
+!vortex.spec
 
 # Installer logs
 pip-log.txt
@@ -81,4 +82,8 @@ test_workspace/
 
 # Extension signing key (Sensitive)
 extension.pem
+
+# Installer binary output
+installer_output/
+
 
