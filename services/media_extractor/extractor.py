@@ -387,7 +387,11 @@ class MediaExtractorEngine:
                 task.status = TaskStatus.FAILED
                 err_str = str(e)
                 if "Sign in to confirm you're not a bot" in err_str:
-                    task.error_message = "YouTube chặn bot. Hãy mở video và bấm nút tải từ Extension Chrome để tự động gửi Cookie xác minh!"
+                    task.error_message = "YouTube chặn bot ('Sign in to confirm you're not a bot'). Hãy mở video và bấm nút tải từ Extension để tự động gửi Cookie xác minh!"
+                elif "Unsupported URL" in err_str:
+                    task.error_message = f"Unsupported URL: Đường dẫn không được hỗ trợ hoặc không phải video hợp lệ ({err_str})"
+                elif "login.php" in err_str:
+                    task.error_message = f"Trang web yêu cầu đăng nhập tài khoản để truy cập nội dung này ({err_str})"
                 else:
                     task.error_message = err_str
                 task.updated_at = time.time()

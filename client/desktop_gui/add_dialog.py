@@ -8,9 +8,9 @@ from PySide6.QtWidgets import (
     QPushButton, QSpinBox, QComboBox, QFileDialog, QMessageBox
 )
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QIcon, QPalette, QColor
+from PySide6.QtGui import QIcon, QPalette, QColor, QGuiApplication
 
-from common.utils import clean_video_url, get_default_download_dir
+from common.utils import clean_video_url, get_default_download_dir, parse_error_details
 from client.desktop_gui.loading_overlay import LoadingOverlay
 from client.desktop_gui.styles import LIGHT_THEME_QSS
 
@@ -427,10 +427,40 @@ class AddDownloadDialog(QDialog):
         self.btn_analyze.setText("🔍 Phân tích Video")
 
         url = self.url_input.text().strip()
-        url_lower = url.lower()
-        if any(url_lower.endswith(ext) or ext in url_lower for ext in [".mp4", ".mkv", ".webm", ".ts", ".m3u8", ".zip", ".iso"]):
-            self.lbl_video_info.setText("⚡ Nhận diện tệp tin / luồng stream (Sẵn sàng tải)")
-            self.lbl_video_info.setVisible(True)
+        info = parse_error_details(err, url)
+
+        # Cập nhật thông báo trực quan trên giao diện hộp thoại
+        self.lbl_video_info.setText(f"⚠️ {info['summary']}")
+        self.lbl_video_info.setStyleSheet(
+            "color: #991b1b; font-weight: bold; background-color: #fee2e2; "
+            "border: 1px solid #f87171; padding: 7px 10px; border-radius: 6px;"
+        )
+        self.lbl_video_info.setVisible(True)
+
+        # Bật hộp thoại cảnh báo chi tiết lỗi cho người dùng
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Warning)
+        msg_box.setWindowTitle("Không Thể Phân Tích Đường Dẫn (URL) - Vortex")
+
+        display_url = (url[:75] + "...") if len(url) > 75 else url
+        formatted_suggestions = info["suggestion"].replace("\n", "<br>")
+        msg_text = (
+            f"<h3 style='color: #b91c1c; margin-top: 0; margin-bottom: 8px;'>⚠️ Không thể phân tích video từ đường dẫn này</h3>"
+            f"<p><b>Đường dẫn:</b> <code>{display_url}</code></p>"
+            f"<p><b>Nguyên nhân:</b> {info['summary']}</p>"
+            f"<hr style='border: 0; border-top: 1px solid #e2e8f0; margin: 10px 0;'>"
+            f"<p><b>💡 Hướng dẫn xử lý:</b><br>{formatted_suggestions}</p>"
+        )
+        msg_box.setText(msg_text)
+        msg_box.setDetailedText(f"Chi tiết kỹ thuật từ hệ thống:\n\n{info['technical_detail']}")
+
+        btn_copy = msg_box.addButton("📋 Sao chép lỗi", QMessageBox.ActionRole)
+        msg_box.addButton("Đóng", QMessageBox.RejectRole)
+        msg_box.exec()
+
+        if msg_box.clickedButton() == btn_copy:
+            clip_content = f"URL: {url}\nLỗi: {info['summary']}\nChi tiết kỹ thuật:\n{info['technical_detail']}"
+            QGuiApplication.clipboard().setText(clip_content)
 
     def _start_download(self):
         url = self.url_input.text().strip()
@@ -471,4 +501,25 @@ class AddDownloadDialog(QDialog):
         self.loading_overlay.hide_overlay()
         self.btn_download.setEnabled(True)
         self.btn_download.setText("🚀 Bắt đầu tải ngay")
-        QMessageBox.critical(self, "Lỗi kết nối", f"Không thể bắt đầu tải: {err}")
+
+        url = self.url_input.text().strip()
+        info = parse_error_details(err, url)
+
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Critical)
+        msg_box.setWindowTitle("Lỗi Khởi Tạo Tác Vụ Tải - Vortex")
+
+        formatted_suggestions = info["suggestion"].replace("\n", "<br>")
+        msg_box.setText(
+            f"<h3 style='color: #b91c1c; margin-top: 0; margin-bottom: 8px;'>❌ Không thể bắt đầu tải tác vụ</h3>"
+            f"<p><b>Nguyên nhân:</b> {info['summary']}</p>"
+            f"<p><b>💡 Hướng giải quyết:</b><br>{formatted_suggestions}</p>"
+        )
+        msg_box.setDetailedText(f"Chi tiết kỹ thuật từ hệ thống:\n\n{info['technical_detail']}")
+
+        btn_copy = msg_box.addButton("📋 Sao chép lỗi", QMessageBox.ActionRole)
+        msg_box.addButton("Đóng", QMessageBox.RejectRole)
+        msg_box.exec()
+
+        if msg_box.clickedButton() == btn_copy:
+            QGuiApplication.clipboard().setText(info['technical_detail'])

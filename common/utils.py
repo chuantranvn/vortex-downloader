@@ -125,3 +125,75 @@ def set_autostart(enable: bool) -> bool:
         print(f"[Autostart] Error updating registry: {e}")
         return False
 
+def parse_error_details(err_raw: str, url: str = "") -> dict:
+    """
+    Phân tích chuỗi lỗi từ backend/yt-dlp và trả về thông tin chi tiết:
+    - summary: Tóm tắt nguyên nhân lỗi dễ hiểu
+    - suggestion: Hướng dẫn người dùng cách khắc phục
+    - technical_detail: Chi tiết kỹ thuật đầy đủ
+    """
+    import json
+    detail = str(err_raw or "")
+    try:
+        j = json.loads(err_raw)
+        if isinstance(j, dict) and "detail" in j:
+            detail = str(j["detail"])
+    except Exception:
+        pass
+
+    lower = detail.lower() + " " + (url or "").lower()
+
+    # 1. Unsupported URL
+    if "unsupported url" in lower:
+        if "facebook.com" in lower:
+            summary = "Đường dẫn Facebook không phải video trực tiếp (là link trang chủ hoặc Bảng tin)."
+            suggestion = (
+                "• Với Facebook: Hãy mở hẳn trang xem video riêng biệt (Watch, Reels hoặc bài viết chi tiết) thay vì dùng link Bảng tin (facebook.com).\n"
+                "• Bạn có thể bấm nút 'Chia sẻ' trên bài viết Facebook -> chọn 'Sao chép liên kết' để lấy đúng link video."
+            )
+        elif any(web in lower for web in ["motchill", "rophim", "phim", "anime", "stream"]):
+            summary = "Trang web xem phim sử dụng trình phát nhúng bảo vệ (không có file video trực tiếp trên URL trang)."
+            suggestion = (
+                "• Các trang web xem phim thường truyền video qua luồng trực tuyến HLS (.m3u8).\n"
+                "• Vui lòng lấy link luồng trực tiếp (.m3u8 hoặc .mp4) để dán vào đây tải đa luồng tốc độ cao."
+            )
+        else:
+            summary = "Đường dẫn URL này không được hỗ trợ bóc tách trực tiếp."
+            suggestion = (
+                "• Đảm bảo liên kết dẫn trực tiếp tới trang video (YouTube, TikTok, Facebook Reel/Watch) hoặc tệp tin media trực tiếp (.mp4, .m3u8, .zip, .iso...).\n"
+                "• Kiểm tra xem đường dẫn có bị sai chính tả hoặc thiếu ký tự không."
+            )
+    # 2. Login required / redirect to login.php
+    elif "login.php" in lower or ("sign in" in lower and "bot" not in lower):
+        summary = "Nội dung này yêu cầu đăng nhập tài khoản hoặc bị giới hạn quyền riêng tư."
+        suggestion = (
+            "• Trang web chuyển hướng đến trang đăng nhập (Facebook / Website có bảo mật).\n"
+            "• Hãy đảm bảo video ở chế độ Công khai (Public) hoặc đồng bộ Cookies tài khoản trước khi tải."
+        )
+    # 3. YouTube bot detection
+    elif "confirm you're not a bot" in lower or "bot" in lower:
+        summary = "YouTube kích hoạt cơ chế chống tự động (Bot Detection)."
+        suggestion = (
+            "• Mở video trên trình duyệt Chrome và bấm nút tải từ Tiện ích mở rộng Vortex Extension để tự động gửi Cookie xác minh danh tính."
+        )
+    # 4. Connection / Gateway error
+    elif "connect" in lower or "gateway" in lower or "timeout" in lower:
+        summary = "Không thể kết nối đến dịch vụ phân tích nội bộ (Gateway / Media Extractor)."
+        suggestion = (
+            "• Đảm bảo ứng dụng Vortex và các microservices đang chạy bình thường.\n"
+            "• Kiểm tra kết nối mạng Internet của máy tính."
+        )
+    else:
+        summary = "Không thể trích xuất thông tin video từ đường dẫn này."
+        suggestion = (
+            "• Kiểm tra lại xem video có đang phát bình thường trên trình duyệt không.\n"
+            "• Nếu là file tải trực tiếp hoặc luồng stream, bạn vẫn có thể bấm 'Bắt đầu tải ngay' để thử tải."
+        )
+
+    return {
+        "summary": summary,
+        "suggestion": suggestion,
+        "technical_detail": detail
+    }
+
+

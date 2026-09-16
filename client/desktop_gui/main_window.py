@@ -18,7 +18,7 @@ from client.desktop_gui.styles import DARK_THEME_QSS
 from client.desktop_gui.websocket_worker import WebSocketProgressWorker
 from client.desktop_gui.add_dialog import AddDownloadDialog, GATEWAY_URL
 from client.desktop_gui.loading_overlay import LoadingOverlay, AsyncActionWorker
-from common.utils import get_default_download_dir, is_autostart_enabled, set_autostart
+from common.utils import get_default_download_dir, is_autostart_enabled, set_autostart, parse_error_details
 
 ICON_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "assets/vortex_icon.png"))
 
@@ -914,6 +914,11 @@ class MainWindow(QMainWindow):
         task_id = item.data(Qt.UserRole)
         task = self.all_tasks_cache.get(task_id)
         if task:
+            status = str(task.get("status", "")).lower()
+            if status == "failed":
+                self._view_error_selected()
+                return
+
             path = task.get("save_path")
             if path and os.path.exists(path) and os.path.isfile(path):
                 try:
@@ -1163,7 +1168,38 @@ class MainWindow(QMainWindow):
         task_id = item.data(Qt.UserRole)
         task = self.all_tasks_cache.get(task_id, {})
         err = task.get("error_message") or "Không có thông tin chi tiết lỗi."
-        QMessageBox.warning(self, "Chi Tiết Lỗi Tải", f"Mã tác vụ: {task_id}\n\nNguyên nhân:\n{err}")
+        url = task.get("url", "")
+        file_name = task.get("file_name") or url or "Không rõ tên"
+
+        info = parse_error_details(err, url)
+
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Critical)
+        msg_box.setWindowTitle("Chi Tiết Lỗi Tải Xuống - Vortex")
+
+        display_url = (url[:75] + "...") if len(url) > 75 else url
+        formatted_suggestions = info["suggestion"].replace("\n", "<br>")
+        msg_text = (
+            f"<h3 style='color: #b91c1c; margin-top: 0; margin-bottom: 8px;'>⚠️ Tác vụ tải đã bị lỗi (Failed)</h3>"
+            f"<p><b>Tên tệp:</b> {file_name}</p>"
+            f"<p><b>Đường dẫn URL:</b> <code>{display_url}</code></p>"
+            f"<p><b>Nguyên nhân:</b> {info['summary']}</p>"
+            f"<hr style='border: 0; border-top: 1px solid #e2e8f0; margin: 10px 0;'>"
+            f"<p><b>💡 Hướng giải quyết:</b><br>{formatted_suggestions}</p>"
+        )
+        msg_box.setText(msg_text)
+        msg_box.setDetailedText(f"Chi tiết kỹ thuật từ hệ thống:\n\nMã tác vụ: {task_id}\nURL: {url}\n{info['technical_detail']}")
+
+        btn_retry = msg_box.addButton("🔄 Thử tải lại", QMessageBox.ActionRole)
+        btn_copy = msg_box.addButton("📋 Sao chép lỗi", QMessageBox.ActionRole)
+        msg_box.addButton("Đóng", QMessageBox.RejectRole)
+        msg_box.exec()
+
+        if msg_box.clickedButton() == btn_retry:
+            self._retry_selected()
+        elif msg_box.clickedButton() == btn_copy:
+            clip_text = f"Tác vụ: {file_name}\nURL: {url}\nLỗi: {info['summary']}\nChi tiết kỹ thuật:\n{info['technical_detail']}"
+            QGuiApplication.clipboard().setText(clip_text)
 
     def _retry_selected(self):
         row = self.table.currentRow()
