@@ -79,7 +79,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: 🚀 Tải File Cài đặt lên Supabase Storage
+      - name: 🚀 Tải File Cài đặt lên Supabase Storage (Tùy chọn)
+        continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -89,11 +90,43 @@ jobs:
         run: |
           python scripts/upload_to_supabase.py --file installer_output/Vortex_Downloader_Setup.exe --skip-on-missing-creds
 
-      - name: 🏷️ Tạo GitHub Release (Nếu push Git Tag v*)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: 🏷️ Tạo hoặc Cập nhật Bản phát hành GitHub Release (Hỗ trợ file đến 2GB)
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Vortex Downloader {0}', github.ref_name) || 'Vortex Downloader (Latest Release)' }}
+          body: |
+            ## ⚡ Vortex Downloader - Windows Release
+            
+            - **Tên file:** `Vortex_Downloader_Setup.exe`
+            - **Nền tảng:** Windows 10/11 (64-bit)
+            - **Bản phát hành:** ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Latest Build' }}
+            
+            ### 📥 Hướng dẫn cài đặt
+            1. Bấm tải file `Vortex_Downloader_Setup.exe` bên dưới.
+            2. Click đúp chuột vào file để khởi chạy bộ cài đặt và sử dụng ngay.
           files: installer_output/Vortex_Downloader_Setup.exe
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
           generate_release_notes: true
-          draft: false
-          prerelease: false
+
+      - name: 📝 Tạo Bảng Tóm tắt & Link Tải Trực Tiếp (Step Summary)
+        shell: pwsh
+        run: |
+          $tag = if ("${{ github.ref }}".StartsWith("refs/tags/")) { "${{ github.ref_name }}" } else { "latest" }
+          $downloadUrl = "https://github.com/${{ github.repository }}/releases/download/$tag/Vortex_Downloader_Setup.exe"
+          $releaseUrl = "https://github.com/${{ github.repository }}/releases/tag/$tag"
+          $sizeMb = [math]::Round((Get-Item "installer_output/Vortex_Downloader_Setup.exe").Length / 1MB, 2)
+          
+          @"
+          ## 🚀 Vortex Downloader - Bản Phát Hành Đã Sẵn Sàng!
+          
+          | Thông tin | Chi tiết |
+          | :--- | :--- |
+          | **File cài đặt** | `Vortex_Downloader_Setup.exe` |
+          | **Dung lượng** | **$sizeMb MB** |
+          | **Nền tảng** | Windows 10/11 (64-bit) |
+          | **Trang Release** | [Xem GitHub Release]($releaseUrl) |
+          | **Link tải trực tiếp** | [📥 **Tải Vortex Downloader ($sizeMb MB)**]($downloadUrl) |
+          
+          > ✨ *File cài đặt đã được đóng gói thành công và lưu trữ trên CDN GitHub Releases (hỗ trợ tối đa 2GB).*
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
