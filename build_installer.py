@@ -41,9 +41,10 @@ def find_iscc_compiler():
         if os.path.exists(c):
             return c
     
-    path_iscc = shutil.which("ISCC")
-    if path_iscc:
-        return path_iscc
+    for name in ["ISCC", "iscc", "ISCC.exe"]:
+        path_iscc = shutil.which(name)
+        if path_iscc:
+            return path_iscc
     return None
 
 def kill_running_instances():
@@ -87,7 +88,9 @@ def main():
         sys.exit(1)
 
     print(f" [✓] Tim thay Inno Setup Compiler tai: {iscc_path}")
-    installer_file = os.path.join(BASE_DIR, "installer_output", "Vortex_Downloader_Setup.exe")
+    installer_dir = os.path.join(BASE_DIR, "installer_output")
+    os.makedirs(installer_dir, exist_ok=True)
+    installer_file = os.path.join(installer_dir, "Vortex_Downloader_Setup.exe")
     if os.path.exists(installer_file):
         try:
             os.remove(installer_file)

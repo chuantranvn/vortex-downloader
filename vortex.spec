@@ -14,13 +14,26 @@ added_datas = [
     (os.path.join(BASE_DIR, 'extension'), 'extension'),
 ]
 
-# Thu thập toàn bộ file nhị phân C/Rust Extension (.pyd) trong môi trường ảo (.venv)
-SITE_PACKAGES = os.path.join(BASE_DIR, '.venv', 'Lib', 'site-packages')
+# Thu thập toàn bộ file nhị phân C/Rust Extension (.pyd) trong môi trường ảo (.venv) hoặc môi trường Python hiện tại
 extra_binaries = []
-if os.path.exists(SITE_PACKAGES):
-    for p in glob.glob(os.path.join(SITE_PACKAGES, '**', '*.pyd'), recursive=True):
-        rel_dir = os.path.dirname(os.path.relpath(p, SITE_PACKAGES))
-        extra_binaries.append((p, rel_dir))
+seen_pyds = set()
+candidate_sp_dirs = [os.path.join(BASE_DIR, '.venv', 'Lib', 'site-packages')]
+try:
+    import site
+    for sp in site.getsitepackages():
+        if os.path.exists(sp) and sp not in candidate_sp_dirs:
+            candidate_sp_dirs.append(sp)
+except Exception:
+    pass
+
+for sp_dir in candidate_sp_dirs:
+    if os.path.exists(sp_dir):
+        for p in glob.glob(os.path.join(sp_dir, '**', '*.pyd'), recursive=True):
+            fname = os.path.basename(p)
+            if fname not in seen_pyds:
+                seen_pyds.add(fname)
+                rel_dir = os.path.dirname(os.path.relpath(p, sp_dir))
+                extra_binaries.append((p, rel_dir))
 
 hidden_imports = [
     'uvicorn',
