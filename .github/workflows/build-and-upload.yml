@@ -39,7 +39,10 @@ jobs:
           cache: 'pip'
 
       - name: ⚙️ Cài đặt Inno Setup 6 Compiler
-        uses: rashil2000/setup-inno-setup@v1
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          echo "C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: 📦 Cài đặt thư viện phụ thuộc (Dependencies)
         run: |
