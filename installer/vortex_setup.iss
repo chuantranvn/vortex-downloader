@@ -45,9 +45,11 @@ Name: "startup"; Description: "Tự động khởi động cùng Windows (Chạy
 
 [Files]
 Source: "..\dist\VortexDownloader\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\extension\*"; DestDir: "{app}\extension"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\Thư mục Extension Trình duyệt"; Filename: "{app}\extension"
 Name: "{group}\Thư mục cài đặt {#MyAppName}"; Filename: "{app}"
 Name: "{group}\Gỡ cài đặt {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon

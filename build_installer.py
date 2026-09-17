@@ -104,7 +104,26 @@ def main():
         print(" [!] LỖI: Inno Setup biên dịch thất bại!")
         sys.exit(1)
 
-    # 4. Báo cáo kết quả
+    # 4. Đóng gói Tiện ích mở rộng (Extension) thành file zip độc lập
+    ext_dir = os.path.join(BASE_DIR, "extension")
+    ext_zip = os.path.join(installer_dir, "Vortex_Extension_Chrome_Edge.zip")
+    if os.path.exists(ext_dir):
+        print(" [*] Dang dong goi Extension thanh file zip...")
+        if os.path.exists(ext_zip):
+            try:
+                os.remove(ext_zip)
+            except Exception:
+                pass
+        import zipfile
+        with zipfile.ZipFile(ext_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(ext_dir):
+                for f in files:
+                    full_p = os.path.join(root, f)
+                    rel_p = os.path.relpath(full_p, ext_dir)
+                    zf.write(full_p, rel_p)
+        print(f" [✓] Da tao file Extension zip tai: {ext_zip}")
+
+    # 5. Báo cáo kết quả
     installer_file = os.path.join(BASE_DIR, "installer_output", "Vortex_Downloader_Setup.exe")
     elapsed = time.time() - start_time
     print_banner("🎉 HOÀN THÀNH ĐÓNG GÓI BỘ CÀI ĐẶT THÀNH CÔNG!")
