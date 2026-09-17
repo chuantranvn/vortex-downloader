@@ -1,0 +1,96 @@
+name: Build Desktop App & Upload to Supabase
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Phiên bản phát hành (ví dụ: 1.0.0)'
+        required: false
+        default: '1.0.0'
+      skip_tests:
+        description: 'Bỏ qua bước kiểm thử hệ thống (test_system.py)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    name: 🏗️ Build Windows Installer & Upload
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 📥 Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🐍 Thiết lập Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: ⚙️ Cài đặt Inno Setup 6 Compiler
+        uses: rashil2000/setup-inno-setup@v1
+
+      - name: 📦 Cài đặt thư viện phụ thuộc (Dependencies)
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+
+      - name: 🧪 Chạy Kiểm thử Hệ thống (System Tests)
+        if: ${{ !inputs.skip_tests }}
+        run: |
+          python test_system.py
+
+      - name: 🔨 Biên dịch PyInstaller & Đóng gói Inno Setup
+        run: |
+          python build_installer.py
+
+      - name: 🔍 Kiểm tra File đầu ra (Verify Installer Output)
+        shell: pwsh
+        run: |
+          if (Test-Path "installer_output/Vortex_Downloader_Setup.exe") {
+            $item = Get-Item "installer_output/Vortex_Downloader_Setup.exe"
+            $mb = [math]::Round($item.Length / 1MB, 2)
+            Write-Host " [✓] File cài đặt đã tạo thành công: $($item.FullName)"
+            Write-Host " [✓] Dung lượng: $mb MB"
+          } else {
+            Write-Error " [!] Lỗi: Không tìm thấy file installer_output/Vortex_Downloader_Setup.exe!"
+            exit 1
+          }
+
+      - name: 📤 Lưu trữ Bản cài đặt lên GitHub Actions Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vortex_Downloader_Windows_Setup
+          path: installer_output/Vortex_Downloader_Setup.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 🚀 Tải File Cài đặt lên Supabase Storage
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_BUCKET: ${{ secrets.SUPABASE_BUCKET || 'releases' }}
+          VERSION: ${{ inputs.version || github.ref_name }}
+          SKIP_ON_MISSING_CREDS: "true"
+        run: |
+          python scripts/upload_to_supabase.py --file installer_output/Vortex_Downloader_Setup.exe --skip-on-missing-creds
+
+      - name: 🏷️ Tạo GitHub Release (Nếu push Git Tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer_output/Vortex_Downloader_Setup.exe
+          generate_release_notes: true
+          draft: false
+          prerelease: false
